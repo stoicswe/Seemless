@@ -1,0 +1,151 @@
+# 02 — VM runtime
+
+The runtime is "QEMU with exactly one configuration". All knobs live in
+`SeemlessKit`; nothing is user-editable except CPU count, RAM, disk size and
+shared folders.
+
+## Building the host stack
+
+Everything installs into `build/prefix`. `scripts/build-deps.sh` must be
+idempotent and pin every source by commit SHA in `scripts/versions.lock`.
+
+Build order (from UTM's Triton post, which is the authoritative recipe —
+read it before starting, link in [11-references.md](11-references.md)):
+
+1. ANGLE (Metal backend) and libepoxy
+2. DXMT (UTM fork, built as a native macOS dylib with shared texture/fence exports)
+3. MoltenVK (host Vulkan driver: D3D12 via vkd3d-proton, and Venus)
+4. vkd3d-proton built as a native macOS arm64 library against MoltenVK (D3D12 backend, see 04)
+   - optional, not bundled: d3dmetal-native (x86_64) for a user-supplied `D3DMetal.framework`
+5. virglrenderer (`utmapp/virglrenderer`, `macos-next`) with venus + neptune
+6. swtpm + libtpms
+7. QEMU (`utmapp/qemu`, `utm-edition`) + `patches/qemu/*.patch`
+
+Other QEMU dependencies: glib, pixman, libslirp, libusb, zstd. Prefer building
+them into the prefix over Homebrew so the app bundle is self-contained;
+Homebrew is acceptable for M0 only.
+
+The dev machine currently has none of `qemu-system-aarch64`, `swtpm`,
+`wimlib-imagex` installed (checked 2026-11-23).
+
+## Baseline command line
+
+Known-good starting point, taken from UTM's published Triton run instructions
+and extended. `VMConfig.qemuArguments()` must generate this and a snapshot
+test must pin it.
+
+```
+qemu-system-aarch64
+  -name seemless -nodefaults -no-user-config
+  -machine virt,highmem=on
+  -accel hvf,ipa-granule-size=0x1000
+  -cpu host
+  -smp cpus=N,sockets=1,cores=N,threads=1
+  -m <MiB>
+  -drive if=pflash,format=raw,unit=0,readonly=on,file=<prefix>/share/qemu/edk2-aarch64-code.fd
+  -drive if=pflash,format=raw,unit=1,file=<vm>/efi_vars.fd
+  -device virtio-ramfb-gl,hostmem=8G,blob=true,venus=true,neptune=true,max_outputs=2
+  -display seemless,socket=<run>/display.sock          # our backend (patch); `cocoa,gl=es` for bring-up
+  -device nvme,drive=sys,serial=seemless0
+  -drive if=none,id=sys,file=<vm>/system.qcow2,format=qcow2,discard=unmap,cache=writethrough,aio=threads
+  -device qemu-xhci,id=usb
+  -device usb-kbd -device usb-tablet                   # see input notes
+  -netdev vmnet-shared,id=n0  (fallback: user,id=n0)
+  -device virtio-net-pci,netdev=n0,mac=<stable>
+  -device virtio-serial-pci
+  -chardev socket,id=agent,path=<run>/agent.sock,server=on,wait=off
+  -device virtserialport,chardev=agent,name=app.seemless.agent.0
+  -chardev socket,id=bulk,path=<run>/bulk.sock,server=on,wait=off
+  -device virtserialport,chardev=bulk,name=app.seemless.bulk.0
+  -chardev socket,id=tpm,path=<run>/swtpm.sock
+  -tpmdev emulator,id=tpm0,chardev=tpm -device tpm-tis-device,tpmdev=tpm0
+  -audiodev coreaudio,id=a0 -device usb-audio,audiodev=a0   # or virtio-sound, see below
+  -rtc base=localtime
+  -qmp unix:<run>/qmp.sock,server=on,wait=off
+  -S                                                    # start paused; app sends `cont`
+```
+
+Environment for the QEMU process (from UTM's recipe):
+`ANGLE_DEFAULT_PLATFORM=metal`, `DYLD_FALLBACK_LIBRARY_PATH=<prefix>/lib:<angle>`,
+and `D3DMETAL_FRAMEWORK_PATH` when D3DMetal is selected.
+
+### Notes on each choice
+
+| Area | Choice | Reason / caveat |
+|------|--------|-----------------|
+| Machine | `virt`, GICv3 | UTM 5.0 notes GICv3 is always used now and is faster |
+| HVF | `ipa-granule-size=0x1000` | UTM fork option; Windows expects 4K pages while Apple silicon hosts use 16K. Treat as required |
+| CPU | `-cpu host`; default vCPUs = performance-core count, capped at 8 | Never give efficiency cores' worth of vCPUs to a game; see 08 |
+| RAM | Default `min(8 GiB, half of host)`; 4 GiB floor | virtio-balloon later for reclaim |
+| Firmware | edk2 aarch64, separate vars file per VM | Secure Boot variant only when D12 is resolved |
+| Boot disk | NVMe | Windows has an inbox NVMe driver, so WinPE needs **no injected storage driver**. This is what makes the image pipeline in 03 simple |
+| Disk format | qcow2 on APFS | Snapshots and the golden-image overlay model need it. Benchmark raw vs qcow2 in M7 |
+| GPU | `virtio-ramfb-gl` with `venus=true,neptune=true` | ramfb gives firmware/WinPE a framebuffer before drivers load. `max_outputs=2` for the atlas (verify the UTM fork supports it on this device: spike S5) |
+| Network | `vmnet-shared` preferred, slirp fallback | vmnet needs either root or the `com.apple.vm.networking` entitlement, which Apple grants restrictively. Ship slirp as the default until that is resolved; slirp is fine for most apps but has no inbound and ICMP quirks |
+| TPM | swtpm over unix socket | Lets Windows see TPM 2.0 without registry bypasses |
+| Audio | Start with `usb-audio` (inbox driver) | Evaluate `virtio-sound` + viosnd for latency in M7 |
+| Input | `usb-tablet` for absolute, plus a relative mouse for game mode | virtio-input has lower overhead but needs a guest driver (vioinput); evaluate in M7 |
+| Clock | `-rtc base=localtime` | Windows assumes local-time RTC; agent also resyncs time after resume |
+
+## Storage layout on the host
+
+```
+~/Library/Application Support/Seemless/
+├── images/
+│   └── win11-<build>-<recipehash>/base.qcow2     # golden image, read-only once sealed
+├── vms/default/
+│   ├── config.json                               # VMConfig
+│   ├── system.qcow2                              # overlay backed by base.qcow2
+│   ├── efi_vars.fd
+│   ├── tpm/                                      # swtpm state
+│   └── state/                                    # suspend-to-disk (migration file)
+├── cache/                                        # downloaded ISOs, guest tools
+└── run/<pid>/                                    # sockets (keep paths under 104 bytes)
+```
+
+- One VM in v1. The layout allows more later without migration.
+- "Reset Windows" = delete `system.qcow2`, recreate overlay. User files should
+  be steered to the shared folder so a reset is cheap.
+
+## Lifecycle
+
+`SeemlessKit.VMProcess` is a state machine; every transition is logged.
+
+```
+stopped → starting → running ⇄ paused
+                        │
+                        ├→ suspending → suspended → resuming → running
+                        └→ stopping → stopped
+              any state → crashed
+```
+
+| Operation | Mechanism |
+|-----------|-----------|
+| Start | Launch swtpm, launch QEMU with `-S`, connect QMP, negotiate capabilities, `cont` |
+| Graceful stop | Agent `Shutdown` request; fall back to QMP `system_powerdown`; hard `quit` after timeout |
+| Pause/resume | QMP `stop` / `cont`. Pause automatically after N minutes with no guest windows open (configurable) |
+| Suspend to disk | QMP `migrate` to file, then quit. **Provisional**: virtio-gpu with blob resources and host GPU state is generally not migratable. Spike S6 decides whether fast resume is (a) QEMU snapshot, (b) guest hibernate (S4), or (c) keep paused in RAM only |
+| Snapshots | qcow2 internal snapshots via QMP (UTM 5.0 ships this for QEMU VMs) |
+| Crash handling | Helper detects child exit; app shows a recoverable error with logs; render-server crashes are reported separately and should not stop the VM |
+
+## QMP client
+
+Implement a minimal async Swift client (`QMPClient`) rather than importing
+QEMU's QAPI C bindings: newline-delimited JSON, `execute`/`return`/`error`
+correlation by `id`, and an `AsyncStream` of events (`SHUTDOWN`, `STOP`,
+`RESUME`, `DEVICE_DELETED`, ...). UTM's `QEMUKit` is a useful reference and is
+a candidate dependency if its licence fits (check in M1).
+
+## Patches we expect to carry on QEMU
+
+Keep each as an independent, minimal patch file with a header explaining why.
+
+| Patch | Purpose | Milestone |
+|-------|---------|-----------|
+| `ui/seemless` display backend | Export each scanout as an IOSurface (mach port sent over the display socket), send damage/resize/cursor events, receive input events | M3 |
+| Cursor shape/visibility/hotspot events on the display socket | Host draws the real Mac cursor; needed for seamless and game-mode capture detection | M3 |
+| vCPU thread QoS | Set `QOS_CLASS_USER_INTERACTIVE` on vCPU threads | M7 |
+| Emulated Xbox 360 USB controller (`usb-xinput`) | Windows binds its inbox XUSB driver; host feeds it from GameController.framework | M7 |
+
+Anything larger than this list should be questioned: prefer solving it in the
+agent or the app.

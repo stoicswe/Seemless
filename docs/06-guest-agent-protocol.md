@@ -1,0 +1,162 @@
+# 06 — Guest agent and host↔guest protocol
+
+## Agent processes
+
+| Binary | Runs as | Started by | Responsibilities |
+|--------|---------|------------|------------------|
+| `seemless-agent-svc.exe` | LocalSystem Windows service, auto-start | SCM | Owns the virtio-serial ports; launches and supervises the session agent in the interactive session (`WTSQueryUserToken` + `CreateProcessAsUser`); self-update; power, time sync, shutdown; driver updates; survives logoff |
+| `seemless-agent.exe` | The logged-on user, interactive desktop, UIAccess | Service | Window tracking, capture/atlas, input assist, clipboard, drag and drop, app catalogue, notifications, file open, DPI/display settings |
+
+The service is the single owner of the serial ports and multiplexes for the
+session agent over a local named pipe (`\\.\pipe\seemless-agent`, ACL'd to
+the interactive user and SYSTEM). This keeps the link alive across logoff,
+session agent crashes and updates.
+
+Rust workspace layout (`guest/agent/`):
+
+```
+crates/
+  proto/        # prost-generated types from /proto, framing, version negotiation
+  transport/    # vioserial port discovery + overlapped I/O; named pipe
+  svc/          # service binary
+  session/      # session agent binary
+  windows-model/# window enumeration, classification, rules.toml (pure logic, unit-testable with recorded dumps)
+  capture/      # WGC + D3D11 atlas
+  shell/        # app catalogue, icons, jump lists, file associations, notifications
+  clip/         # clipboard + drag and drop
+```
+
+Build from macOS: `cargo xwin build --target aarch64-pc-windows-msvc
+--release`. Unit tests for pure-logic crates run on the Mac host
+(`cargo test -p windows-model`); Windows-API crates are tested in the VM via
+`seemlessctl guest test` (copies a test binary through the bulk channel and
+runs it).
+
+## Transport and framing
+
+- Two virtio-serial ports (02). Guest side opens them by port name via the
+  vioserial device interface (`GUID_VIOSERIAL_PORT`, enumerate with SetupAPI,
+  match the port name).
+- Frame: `u32 length (LE) | u8 kind | payload`. `kind` 0 = Protobuf
+  `Envelope`, 1 = raw bulk chunk (bulk port only). Max frame 1 MiB on control,
+  4 MiB on bulk. A receiver that sees an oversized or malformed frame resets
+  the channel (close, reopen, renegotiate).
+- `Envelope { uint64 seq; uint64 reply_to; oneof body {...} }`. Requests carry
+  `seq`; responses set `reply_to`. Events have `reply_to = 0`.
+- **Handshake**: both sides send `Hello { protocol_major, protocol_minor,
+  build, capabilities[] }` on connect. Major mismatch → host offers to update
+  guest tools. Features are gated on capability strings, not version numbers.
+- **Heartbeat**: `Ping`/`Pong` every 1 s; 3 missed → "agent lost" (05).
+- virtio-serial gives no connect/disconnect framing guarantee beyond
+  open/close events, so after any reconnect the agent sends a full
+  `WindowSnapshot` and the host discards prior state.
+
+## Message catalogue (v1)
+
+Direction: H→G host to guest, G→H guest to host. This table is the contract;
+`proto/seemless.proto` implements it.
+
+### Session and system
+
+| Message | Dir | Purpose |
+|---------|-----|---------|
+| `Hello`, `Ping`, `Pong` | both | Handshake, liveness |
+| `SessionState { logged_on, locked, user, secure_desktop }` | G→H | Host shows desktop mode when locked or on secure desktop |
+| `SetHostInfo { displays[], scale, work_area, locale, keyboard_layout, timezone, appearance(dark/light) }` | H→G | Agent applies resolution/DPI/work area/theme |
+| `TimeSync { unix_nanos }` | H→G | After start and resume |
+| `Shutdown { mode: shutdown|restart|logoff|hibernate }` | H→G | Graceful power |
+| `GuestInfo { os_build, driver_versions, agent_version, gpu_adapter }` | G→H | Diagnostics |
+| `UpdateTools { iso_volume_label, version }` | H→G | Service installs from attached tools ISO |
+
+### Windows (seamless)
+
+| Message | Dir | Purpose |
+|---------|-----|---------|
+| `WindowSnapshot { windows[] }` | G→H | Full state after connect |
+| `WindowAdded/Updated { id, owner_id, class(kind), rect, title, app_key, pid, state(min/max/normal), flags(resizable, topmost, has_alpha), icon_id }` | G→H | Incremental; `Updated` is field-masked and coalesced to at most one per window per frame |
+| `WindowRemoved { id }` | G→H | |
+| `AtlasFrame { serial, entries[{ id, atlas_rect, content_size }] }` | G→H | Which windows changed in atlas present `serial` |
+| `ForegroundChanged { id }` | G→H | Guest-initiated focus change → host orders that `NSWindow` front (subject to focus-stealing policy) |
+| `PointerFocus { id }` | H→G | Raise without activate |
+| `Activate { id }` / `Activated { id }` | H→G / G→H | Key focus handshake |
+| `Deactivate {}` | H→G | Mac app took focus |
+| `SetWindowRect { id, rect, flags }` | H→G | Host-driven move, zoom, tiling |
+| `WindowCommand { id, cmd: close|minimize|restore|maximize }` | H→G | Title-bar-equivalent actions from Mac menus/Dock |
+| `HitTest { id, point } → HitTestResult { code }` | H→G | For host-driven move (v2) |
+| `CursorState { visible, clipped, clip_rect }` | G→H | Game-mode detection (08) |
+| `FullscreenState { id, exclusive }` | G→H | Game-mode trigger |
+
+Window ids are agent-assigned `u64`s, not raw HWNDs (HWNDs get reused).
+
+### Apps and shell
+
+| Message | Dir | Purpose |
+|---------|-----|---------|
+| `ListApps → AppList { apps[{ app_key, name, exe, args, icon_id, source: start_menu|uwp|running }] }` | H→G | Start-menu catalogue for the launcher |
+| `AppsChanged` | G→H | Start menu folders changed (install/uninstall) |
+| `GetIcon { icon_id, size } → bulk transfer (PNG)` | H→G | Icons at 32/64/256/512 |
+| `Launch { app_key | path, args, files[], verb }` | H→G | Start an app or open a document |
+| `OpenOnHost { kind: url|path, value }` | G→H | Guest asks host to open a link/file with a Mac app (policy-checked) |
+| `Notification { app_key, title, body, icon_id, tag }` | G→H | Toast forwarding |
+| `TrayItems { items[] }`, `TrayInvoke { id, action }` | G→H / H→G | Notification-area icons surfaced in the Mac menu bar extra (M6) |
+| `RunCommand { exe, args, elevated, capture_output }` | H→G | Diagnostics and scripted setup only; never exposed to untrusted input |
+
+### Clipboard and drag and drop
+
+| Message | Dir | Purpose |
+|---------|-----|---------|
+| `ClipboardOffer { serial, formats[] }` | both | Lazy: announce formats on change, do not send data |
+| `ClipboardRequest { serial, format } → bulk transfer` | both | Fetch on paste (delayed rendering on Windows, promised data on macOS) |
+| `DragEnter/Move/Leave/Drop { window_id, point, formats[] }` | H→G | Mac → Windows drag; agent runs an OLE drag source proxy |
+| `DragStart { formats[], preview_icon }` … | G→H | Windows → Mac drag (M6, harder) |
+
+Formats in v1: plain text (UTF-8 ↔ `CF_UNICODETEXT`), RTF, HTML, PNG image
+(↔ `CF_DIBV5`), file lists (via the shared folder: files are staged in a
+host temp directory that is visible to the guest, and vice versa).
+
+## Host-side validation rules (the guest is untrusted)
+
+- Rectangles are clamped to display/atlas bounds; atlas rects outside the
+  atlas texture are rejected; window count capped (e.g. 512).
+- Strings are length-capped and treated as plain text everywhere they are
+  shown (titles, notifications). No rich text, no markup.
+- `OpenOnHost`: `http/https/mailto` URLs only by default, and only when the
+  guest is foreground due to recent user input (within 2 s), otherwise ask.
+  Paths must resolve inside a shared folder after symlink resolution.
+- Bulk transfers have a declared size up front, a per-transfer cap, and
+  a rate limit. Clipboard data is only sent to the guest while a guest window
+  is key (and the reverse), unless the user disables that in settings.
+- `ForegroundChanged` may not steal focus from a non-Seemless Mac app; it
+  bounces the Dock icon instead.
+- Icons are decoded with ImageIO in-process only after a size/format check.
+
+## Guest tools ISO
+
+`seemless-tools.iso` (built by `guest/tools/build.sh`, shipped inside the app
+bundle):
+
+```
+/agent/         seemless-agent-svc.exe, seemless-agent.exe, rules.toml, version.json
+/drivers/       netkvm, vioserial, viofs, viogpu3d (+Triton UMD), viosnd ... (ARM64, .inf/.sys/.cat)
+/redist/        VC++ runtimes, DirectX legacy redist, WebView2 runtime installer (if licence allows bundling; else fetched by winget at first boot)
+/install.cmd    idempotent installer used by firstboot and by updates
+/uninstall.cmd
+```
+
+Update flow: host attaches the ISO as a CD-ROM → sends `UpdateTools` → the
+service runs `install.cmd` (stops session agent, replaces binaries via
+rename-and-restart, `pnputil` for drivers, restarts) → reconnect with new
+`Hello`. A driver update that needs a reboot is reported, not forced.
+
+## Host side: `AgentClient` (SeemlessKit)
+
+- An actor that owns both sockets, does framing, request/response
+  correlation with timeouts, and exposes `AsyncStream`s per event family.
+- `WindowModel` (pure Swift, unit-tested): applies snapshot/add/update/remove
+  into an ordered collection, resolves owner chains, emits diffs for the UI.
+  The same recorded window dumps used for the Rust classifier tests should
+  drive `WindowModel` tests.
+- A **mock agent** (`seemlessctl mock-agent --script file.json`) that speaks
+  the protocol over a unix socket, so the whole window bridge can be developed
+  and UI-tested on the Mac with no VM running. Build this in M4; it pays for
+  itself immediately.
