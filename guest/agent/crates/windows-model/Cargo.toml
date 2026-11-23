@@ -1,0 +1,7 @@
+[package]
+name = "windows-model"
+description = "Window enumeration results, classification and rules.toml. Pure logic: unit-tested on macOS with recorded window dumps (docs/05, docs/06)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false

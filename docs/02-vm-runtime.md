@@ -1,13 +1,16 @@
 # 02 — VM runtime
 
 The runtime is "QEMU with exactly one configuration". All knobs live in
-`SeemlessKit`; nothing is user-editable except CPU count, RAM, disk size and
-shared folders.
+`SeemlessKit`; only the settings listed under "User-editable settings" below
+can be changed, and only while the VM is stopped.
 
 ## Building the host stack
 
 Everything installs into `build/prefix`. `scripts/build-deps.sh` must be
 idempotent and pin every source by commit SHA in `scripts/versions.lock`.
+Every component is built with `MACOSX_DEPLOYMENT_TARGET=26.0` (D10); without
+it clang targets the build machine's SDK and the result will not run on
+older macOS 26 releases.
 
 Build order (from UTM's Triton post, which is the authoritative recipe —
 read it before starting, link in [11-references.md](11-references.md)):
@@ -25,8 +28,10 @@ Other QEMU dependencies: glib, pixman, libslirp, libusb, zstd. Prefer building
 them into the prefix over Homebrew so the app bundle is self-contained;
 Homebrew is acceptable for M0 only.
 
-The dev machine currently has none of `qemu-system-aarch64`, `swtpm`,
-`wimlib-imagex` installed (checked 2026-11-23).
+Implemented by `scripts/build-deps.sh` (S1, 2026-11-23): it builds this order
+with the deviations listed in `docs/spikes/S1-host-stack-build.md`, and
+`scripts/smoke-qemu.sh` boots the result to firmware. For release, configure
+QEMU with `--disable-tcg` (HVF only) to avoid the `allow-jit` entitlement.
 
 ## Baseline command line
 
@@ -61,7 +66,8 @@ qemu-system-aarch64
   -tpmdev emulator,id=tpm0,chardev=tpm -device tpm-tis-device,tpmdev=tpm0
   -audiodev coreaudio,id=a0 -device usb-audio,audiodev=a0   # or virtio-sound, see below
   -rtc base=localtime
-  -qmp unix:<run>/qmp.sock,server=on,wait=off
+  -qmp unix:<run>/qmp.sock,server=on,wait=off       # owner (VMProcess)
+  -qmp unix:<run>/ctl.sock,server=on,wait=off       # other controllers (VMRemote)
   -S                                                    # start paused; app sends `cont`
 ```
 
@@ -77,7 +83,7 @@ and `D3DMETAL_FRAMEWORK_PATH` when D3DMetal is selected.
 | HVF | `ipa-granule-size=0x1000` | UTM fork option; Windows expects 4K pages while Apple silicon hosts use 16K. Treat as required |
 | CPU | `-cpu host`; default vCPUs = performance-core count, capped at 8 | Never give efficiency cores' worth of vCPUs to a game; see 08 |
 | RAM | Default `min(8 GiB, half of host)`; 4 GiB floor | virtio-balloon later for reclaim |
-| Firmware | edk2 aarch64, separate vars file per VM | Secure Boot variant only when D12 is resolved |
+| Firmware | edk2 aarch64, separate vars file per VM: a zeroed 64 MiB file (QEMU ships no aarch64 vars template; S1) | Secure Boot variant only when D12 is resolved |
 | Boot disk | NVMe | Windows has an inbox NVMe driver, so WinPE needs **no injected storage driver**. This is what makes the image pipeline in 03 simple |
 | Disk format | qcow2 on APFS | Snapshots and the golden-image overlay model need it. Benchmark raw vs qcow2 in M7 |
 | GPU | `virtio-ramfb-gl` with `venus=true,neptune=true` | ramfb gives firmware/WinPE a framebuffer before drivers load. `max_outputs=2` for the atlas (verify the UTM fork supports it on this device: spike S5) |
@@ -86,6 +92,34 @@ and `D3DMETAL_FRAMEWORK_PATH` when D3DMetal is selected.
 | Audio | Start with `usb-audio` (inbox driver) | Evaluate `virtio-sound` + viosnd for latency in M7 |
 | Input | `usb-tablet` for absolute, plus a relative mouse for game mode | virtio-input has lower overhead but needs a guest driver (vioinput); evaluate in M7 |
 | Clock | `-rtc base=localtime` | Windows assumes local-time RTC; agent also resyncs time after resume |
+
+## User-editable settings
+
+`VMConfig` (`vms/<name>/config.json`). Fields added later decode with
+defaults, so old configs keep loading. Edited through `VMManager.update`
+(app settings sheet, `seemlessctl vm set`), which refuses changes while the
+VM runs, grows the disk when `diskSizeGiB` rises and refuses to shrink it.
+
+| Setting | Values | Effect on the command line |
+|---------|--------|----------------------------|
+| CPU, RAM, disk | validated against the host | `-smp`, `-m`, `qemu-img resize` |
+| Graphics backend | `dxmt` / `d3dmetal` | `NPT_BACKEND` |
+| Network | user / vmnet-shared / none, plus loopback port forwards | `-netdev` |
+| Boot order | `disk-first` (default) / `removable-first` | `bootindex` on the NVMe disk and USB drives; edk2 reads it from fw_cfg |
+| Firmware menu wait | 0–30 s (default 0) | `-boot menu=on,splash-time=<ms>`; shows edk2's "Start boot option" countdown (checked by screendump, 2026-11-23) |
+| TPM 2.0 | on (default) / off | off drops the TPM devices and swtpm is not started (`RunningVM.swtpmPID` = 0) |
+| Attached media | ISOs (USB CD-ROM) and raw images (USB disk), absolute paths | persisted drives `m0`, `m1`… come before per-launch drives |
+| Shared folders | later (S7) | |
+
+Per-launch only (`LaunchOptions.bootKeys`): **firmware setup** presses Escape
+for 8 s after the vCPUs start, which opens the edk2 front page (Device
+Manager, Boot Manager, Boot Maintenance Manager; checked by screendump);
+**CD prompt** presses Space for 40 s to answer "Press any key to boot from
+CD". Maintenance actions on a stopped VM: reset UEFI variables (blank 64 MiB
+vars file), clear TPM (empty state dir).
+
+Note: the edk2 build from UTM's QEMU fork shows UTM's logo at boot. Replace
+it with our own firmware build before any release (docs/10).
 
 ## Storage layout on the host
 
@@ -127,14 +161,25 @@ stopped → starting → running ⇄ paused
 | Suspend to disk | QMP `migrate` to file, then quit. **Provisional**: virtio-gpu with blob resources and host GPU state is generally not migratable. Spike S6 decides whether fast resume is (a) QEMU snapshot, (b) guest hibernate (S4), or (c) keep paused in RAM only |
 | Snapshots | qcow2 internal snapshots via QMP (UTM 5.0 ships this for QEMU VMs) |
 | Crash handling | Helper detects child exit; app shows a recoverable error with logs; render-server crashes are reported separately and should not stop the VM |
+| Implemented (M1) | `VMProcess` (owner) and `VMRemote` (other processes, via `vms/<name>/running.json`); stop escalates ACPI power button → QMP `quit` → SIGTERM → SIGKILL; restart = QMP `system_reset`; the last 5 QEMU logs are kept in `vms/<name>/logs/`. CLI: `seemlessctl vm run|status|pause|resume|restart|stop` |
+| `VMManager` | One actor over every VM in a storage root: list, status (owned by this process or started elsewhere), start/pause/resume/reset/stop, settings, media, firmware/TPM reset, snapshots. Used by the app and the CLI's `vm set`/`media`/`firmware` commands. Each VM started by one process gets its own `run/<pid>/<id>/` |
 
 ## QMP client
 
-Implement a minimal async Swift client (`QMPClient`) rather than importing
-QEMU's QAPI C bindings: newline-delimited JSON, `execute`/`return`/`error`
-correlation by `id`, and an `AsyncStream` of events (`SHUTDOWN`, `STOP`,
-`RESUME`, `DEVICE_DELETED`, ...). UTM's `QEMUKit` is a useful reference and is
-a candidate dependency if its licence fits (check in M1).
+Implemented (M1): `kit/Sources/SeemlessKit/QMPClient.swift`, a minimal async
+Swift actor rather than QEMU's QAPI C bindings: newline-delimited JSON,
+`execute`/`return`/`error` correlation by `id`, and an `AsyncStream` of
+events (`SHUTDOWN`, `STOP`, `RESUME`, ...). Lessons from building it:
+
+- **Two QMP monitors.** QEMU serves one client per monitor, so the owner
+  (`VMProcess`) uses `qmp.sock` and every other controller (`VMRemote`, a
+  second `seemlessctl`) uses `ctl.sock`.
+- **Never block the Swift concurrency pool on a socket.** `FileHandle.bytes`
+  does, and a handful of idle connections then starve all other tasks. Socket
+  reads run on a dedicated thread (`LineReader`).
+- **Waits with timeouts must be cancellable.** A task group waits for every
+  child, so racing an uncancellable continuation against a timer never times
+  out. Use one continuation resumed by whichever event comes first.
 
 ## Patches we expect to carry on QEMU
 

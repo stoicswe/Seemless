@@ -123,7 +123,7 @@ Status values: **Decided**, **Provisional** (needs a named spike in
 | D7 | Host↔agent protocol: length-prefixed Protobuf over virtio-serial | Decided | vioserial is a mature signed driver; schema shared by Swift and Rust |
 | D8 | Image built by **apply-time debloat in WinPE** from the user's stock ISO, following the Tiny11 removal set as a recipe | Provisional (S4) | Tiny11 Builder is Windows-only and has no licence; see 03 |
 | D9 | x86/x64 apps run via Windows' own Prism | Decided | Nothing to build |
-| D10 | Host app in Swift; minimum macOS 14; Apple silicon only | Decided | Recent Metal features for MoltenVK; simplifies everything. May rise if S8 shows MoltenVK needs a newer Metal |
+| D10 | Host app in Swift; **minimum macOS 26**; Apple silicon only | Decided (owner, 2026-11-23) | One modern baseline: current Metal for MoltenVK and the render servers, KosmicKrisp (needs macOS 26) available on every supported Mac, current AppKit/SwiftUI APIs. Every binary we build, including dependencies, targets `MACOSX_DEPLOYMENT_TARGET=26.0` |
 | D11 | Distribution: Developer ID + notarization, outside the App Store | Decided | GPL child processes, optional user-supplied frameworks |
 | D12 | Secure Boot off and test-signing on during development; revisit for release | Open | Depends on how the KMD is signed (S2) |
 | D13 | Guest window chrome stays Windows-drawn; host windows are borderless with macOS shadow | Decided | Matches user expectation from Parallels; avoids per-app non-client hacks |

@@ -1,0 +1,32 @@
+# Pinned upstream sources. One entry per line:
+#   name  url  ref  sha
+# `ref` is the branch or tag the SHA was taken from (for humans). Scripts
+# check out `sha` only. Bump deliberately; benchmark before and after (docs/08).
+#
+# Recorded 2026-11-23 from branch heads / latest release tags.
+# Status: host-stack pins BUILD (S1, 2026-11-23, docs/spikes/S1-host-stack-build.md).
+# They are not yet confirmed to WORK at runtime; S2 does that.
+# moltenvk/vkd3d-proton: recorded, not built (S1 used Homebrew molten-vk 1.4.2;
+# vkd3d-proton is S8). Guest driver sources: not built (WP4.6).
+
+# --- Host graphics stack (order follows UTM's Triton build notes) ---
+webkit-angle      https://github.com/utmapp/WebKit.git                    pinned-by-utm   6a7f464047e2f6f2b65fe315aaad5d1ff3229cb7
+libepoxy          https://github.com/utmapp/libepoxy.git                  macos-venus     15d904dcb1d5a8d626ffe11e8f3339499d6f7b09
+dxmt              https://github.com/utmapp/dxmt.git                      main            1fe2e752c98207518a99c9322482f63ebb9f0232
+moltenvk          https://github.com/KhronosGroup/MoltenVK.git            v1.4.2          db66022459ffb663aa2b50f6b018bc2e124f5edf
+vkd3d-proton      https://github.com/HansKristian-Work/vkd3d-proton.git   v3.1            4522cc1a8b1347f1ab1b0f7b14a23ed9444d95d1
+virglrenderer     https://github.com/utmapp/virglrenderer.git             macos-next      dd0652b13e589c4c124ea79123a3adcd85173f4f
+qemu              https://github.com/utmapp/qemu.git                      utm-edition     8ab298bc52158e52bbaf91b7f91b75d46d7384c9
+
+# --- Optional, never bundled with a framework (docs/04 "D3DMetal policy") ---
+d3dmetal-native   https://github.com/utmapp/d3dmetal-native.git           main            af1ee1710711fadff41dead87960d0f1336c1047
+
+# --- TPM ---
+libtpms           https://github.com/stefanberger/libtpms.git             v0.10.2         03ff2481e133540be3b3ffe3daa1483d2a73d967
+swtpm             https://github.com/stefanberger/swtpm.git               v0.10.2         32b5a0575991a73398de9749d63cafd847008af2
+
+# --- Guest driver sources (built in the Windows build VM, WP4.6) ---
+win-kmd           https://github.com/osy/kvm-guest-drivers-windows.git    neptune         d25bb08c4a9cfb034f4db9ea9e2982a8be02e86b
+win-umd-mesa      https://github.com/osy/virtio-win-mesa.git              neptune         68b837cda82b83e4778f60dc40b471b0545ea9c3
+win-build-mesa    https://github.com/osy/build-mesa.git                   main            51c5c4e040a1148e751ef62310533a1d9a79a315
+neptune-protocol  https://github.com/osy/neptune-protocol.git             main            b0152e59f068f04138520fe471a96263c8888860

@@ -1,0 +1,23 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    # Apple silicon runner with Xcode 26+: Seemless is arm64-only and needs
+    # the macOS 26 SDK (docs/01 D10). Label not yet verified on GitHub.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain from guest/agent/rust-toolchain.toml, plus the Windows target
+        working-directory: guest/agent
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-pc-windows-msvc
+
+      - name: Checks
+        run: scripts/check.sh

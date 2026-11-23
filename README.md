@@ -42,7 +42,7 @@ Implementing sessions start with [CLAUDE.md](CLAUDE.md).
 
 ## Limits to know up front
 
-- Apple silicon only; Windows 11 ARM64 only.
+- Apple silicon Macs running macOS 26 or later; Windows 11 ARM64 only.
 - x64 games run through Windows' own emulator, so CPU-heavy titles run below
   native speed.
 - Games that need kernel anti-cheat will not work.

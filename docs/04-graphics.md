@@ -91,7 +91,8 @@ Rules for this path:
   and list every required-but-missing Vulkan feature or extension. Do not
   guess the list from memory.
 - Keep the Vulkan driver swappable (ICD selection by environment): MoltenVK
-  is the default, KosmicKrisp (Mesa's Vulkan-on-Metal, macOS 26+, experimental
+  is the default, KosmicKrisp (Mesa's Vulkan-on-Metal; needs macOS 26, which
+  every supported Mac has; experimental
   per UTM 5.0 notes) is the alternative to test in S8.
 - D3D11 stays on DXMT. Do not route D3D11 through DXVK → MoltenVK; UTM tried
   it and found it unstable, and DXMT avoids one translation layer.
@@ -186,6 +187,11 @@ UTM renders through SPICE/CocoaSpice. We do not (D4). We need:
 3. Damage, cursor and vblank information.
 
 ### `ui/seemless` QEMU display backend (patch)
+
+S1 finding: QEMU's built-in `-display dbus` backend is compiled into our
+build and already exports scanouts and takes input from another process.
+**S3 evaluates `-display dbus` first**; write `ui/seemless` only if dbus
+cannot meet the latency, IOSurface or multi-scanout needs on macOS.
 
 Modelled on QEMU's existing `ui/cocoa.m` GL path and `ui/dbus-listener.c`
 (which already implements "export scanout to another process").

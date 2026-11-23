@@ -68,6 +68,29 @@ WinPE needs no injected drivers.
 > (1) fails: build a custom boot path on the host by writing our own
 > `winpeshl.ini` into `boot.wim` with `wimlib` (open source, runs on macOS).
 
+## Implementation status (2026-11-23)
+
+Built and tested on the Mac without Windows media (`seemlessctl image …`,
+`kit/Sources/SeemlessKit/Image/`, `image/`):
+
+- Stage 2 inspect: WIM/ESD catalogue parser (no Microsoft tools); ISO mounted
+  read-only with `hdiutil`.
+- Stage 3 payload: MBR + FAT32 raw disk built with `hdiutil`/`diskutil` (no
+  root), `.cmd` files converted to CRLF, `autounattend.xml` at the root.
+  The payload is **writable**: the guest leaves `seemless/result/` (logs,
+  status, DISM inventories) there for the host to collect after power-off.
+- Stage 5 orchestration: VM with the ISO and payload as USB drives, network
+  off, Space pressed for 40 s to get past "Press any key to boot from CD".
+- Licence: Windows' licence page is shown during OOBE unless the user passes
+  `--accept-windows-license` (an explicit statement by them). Never accepted
+  on the user's behalf.
+- Account password generated on the host, stored in the Keychain (service
+  `app.seemless.windows-account`, account = VM name), deleted with the VM.
+
+Written but **untested** until S4: `apply.cmd`, `firstboot.cmd`, both answer
+files. Runbook: `docs/testing/first-iso.md`. Recipes are empty on purpose
+until the first real inventory exists (WP2.3).
+
 ## Pipeline stages
 
 `seemlessctl image build --iso <path> --recipe seemless-gaming` runs:

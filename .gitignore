@@ -1,0 +1,61 @@
+# Build outputs
+/build/
+.build/
+target/
+DerivedData/
+*.xcarchive/
+spikes/**/out/
+
+# Swift / Xcode user state
+# (kit/Package.resolved and guest/agent/Cargo.lock ARE committed: they pin versions)
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+
+# VM artefacts: never commit Windows media, disks or firmware state
+*.iso
+*.img
+*.dmg
+*.qcow2
+*.raw
+*.vhd
+*.vhdx
+*.vmdk
+*.wim
+*.esd
+*.fd
+efi_vars.fd
+tpm/
+running.json
+
+# Logs and screenshots from local runs
+*.log
+screendump*.png
+
+# Never commit proprietary or unlicensed third-party code (docs/10)
+D3DMetal.framework/
+*GamePortingToolkit*/
+tiny11builder*/
+Tiny11*/
+
+# Secrets and signing material
+.env
+.env.*
+*.p12
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+
+# Claude Code local settings (shared settings.json stays committed)
+.claude/settings.local.json
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS
+.DS_Store
+._*

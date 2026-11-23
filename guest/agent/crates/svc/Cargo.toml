@@ -1,0 +1,11 @@
+[package]
+name = "svc"
+description = "LocalSystem Windows service: owns the virtio-serial ports and supervises the session agent (docs/06)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "seemless-agent-svc"
+path = "src/main.rs"

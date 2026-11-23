@@ -9,7 +9,7 @@ Severity × likelihood, highest first.
 | R1 | **Triton/Neptune is experimental.** UTM itself warns of limited game compatibility and guest instability | Core promise (gaming) under-delivers | Spike S2 measures reality before anything else. Product messaging follows measured tiers (00). Contribute fixes upstream. Desktop/app use does not depend on game compatibility |
 | R2 | **x64 emulation tax (Prism)** is outside our control | CPU-bound games run well below native | State it plainly. Benchmarks include an x64-vs-ARM64 ratio so we can tell users what to expect |
 | R3 | **Kernel driver signing.** Our own KMD builds need Microsoft attestation signing (EV certificate, Hardware Dev Center) or test-signing with Secure Boot off | Blocks shipping our own driver builds; test-signing shows a watermark and weakens guest security | S2 determines how UTM's builds are signed. Until resolved, consume UTM's signed builds and keep Secure Boot off (D12). Budget time and cost for attestation before release |
-| R4 | **D3D12 via MoltenVK has two unproven halves.** (a) vkd3d-proton expects a modern desktop Vulkan driver and MoltenVK does not implement all of it; UTM reports even DXVK on MoltenVK as unstable. (b) The guest still needs a D3D12 WDDM driver and Neptune D3D12 protocol, which upstream has announced but not shipped; if it does not arrive we write our own (M7b), which is the largest and most specialised piece of work in the project | Many 2022+ titles are D3D12-only | S8 measures the MoltenVK gap before any integration work. Budget for carrying MoltenVK/vkd3d-proton patches. KosmicKrisp is the alternative Vulkan driver on macOS 26+. D3DMetal remains an optional user-supplied fallback. Host-side work starts now and is testable without a guest driver. M7b has an explicit trigger, a bring-up ladder, and never blocks M1–M6. Do not promise D3D12 until a real title runs |
+| R4 | **D3D12 via MoltenVK has two unproven halves.** (a) vkd3d-proton expects a modern desktop Vulkan driver and MoltenVK does not implement all of it; UTM reports even DXVK on MoltenVK as unstable. (b) The guest still needs a D3D12 WDDM driver and Neptune D3D12 protocol, which upstream has announced but not shipped; if it does not arrive we write our own (M7b), which is the largest and most specialised piece of work in the project | Many 2022+ titles are D3D12-only | S8 measures the MoltenVK gap before any integration work. Budget for carrying MoltenVK/vkd3d-proton patches. KosmicKrisp is the alternative Vulkan driver (available on every supported Mac, since we require macOS 26). D3DMetal remains an optional user-supplied fallback. Host-side work starts now and is testable without a guest driver. M7b has an explicit trigger, a bring-up ladder, and never blocks M1–M6. Do not promise D3D12 until a real title runs |
 | R5 | **Atlas capture may not work as designed** (WGC on this driver, second scanout, consent/border behaviour, cost) | Seamless falls back to crop tier with occlusion limits | S5 early. Tiered pixel-source design (05) means the bridge is not wasted either way |
 | R6 | **Apply-time unattended install** may not work on current ARM64 media | Image pipeline needs the `boot.wim` modification fallback or path C | S4 early; fallback documented in 03 |
 | R7 | **Tiny11 Builder has no licence** and is Windows-only | Cannot bundle or port its code | We implement our own recipe engine and treat Tiny11 as a behavioural reference; support user-built Tiny11 ISOs; ask the author for an explicit licence or permission |
@@ -49,14 +49,14 @@ packaging reviewed.
 | Our code | MIT (current repo `LICENSE`) | — | — |
 | QEMU (UTM fork) | GPLv2 (parts LGPL/BSD) | Separate executable, launched as a child process, talked to over sockets | Ship licence text; provide complete corresponding source for the exact build (our fork SHA + `patches/qemu`); do not link QEMU code into the app |
 | virglrenderer | MIT | Linked by QEMU / render server | Notice |
-| DXMT | Verify (believed zlib/libpng-style, like DXVK) | Dylib loaded by render server | Notice |
+| DXMT | LGPL-2.1-or-later (read from `LICENSE`, 2026-11-23) | Dylib loaded by render server | LGPL: keep it a separately replaceable dylib; ship licence and source for our exact build |
 | d3dmetal-native | MIT (checked 2026-11-23) | Optional dylib | Notice |
 | D3DMetal.framework | Apple proprietary (Game Porting Toolkit licence) | **Optional, user-supplied only**; not part of the planned D3D12 path | Never bundle or download; explain terms in UI |
 | MoltenVK, ANGLE, libepoxy | Apache-2.0 / BSD / MIT | Bundled libs | Notices |
-| vkd3d-proton | LGPL-2.1 (verify at pin time) | Bundled dylib loaded by the render server (D3D12 → Vulkan) | Keep it a separate, replaceable dylib; ship licence and source for our exact build including patches |
+| vkd3d-proton | LGPL-2.1 (GitHub metadata, 2026-11-23) | Bundled dylib loaded by the render server (D3D12 → Vulkan) | Keep it a separate, replaceable dylib; ship licence and source for our exact build including patches |
 | swtpm / libtpms | BSD-3 | Child process | Notice |
 | glib, libslirp, pixman, libusb | LGPL / BSD / MIT | Dynamically linked by QEMU | LGPL: keep them as replaceable dylibs |
-| Windows guest drivers (kvm-guest-drivers-windows forks) | BSD-3 (upstream virtio-win) | In tools ISO | Notice; check fork additions |
+| Windows guest drivers (kvm-guest-drivers-windows forks) | BSD-2-Clause as reported for `osy/kvm-guest-drivers-windows` (2026-11-23) | In tools ISO | Notice; check fork additions |
 | Mesa-derived UMD (Triton/Neptune guest) | MIT | In tools ISO | Notice |
 | UTM (app), CocoaSpice, QEMUKit | Apache-2.0 | Reference; optional dependency | Notice if any code is used |
 | Tiny11 Builder | **None stated** | Reference only | Do not copy code or bundle binaries |
@@ -75,6 +75,9 @@ Rules that follow:
    bundle, ever.
 5. Marketing and UI: "Windows" is used descriptively; no Microsoft or Apple
    logos; no claims of endorsement.
+6. The edk2 firmware from UTM's QEMU build shows UTM's logo at boot (seen
+   2026-11-23). Build our own firmware with our own (or no) logo before
+   release.
 
 ## Distribution
 

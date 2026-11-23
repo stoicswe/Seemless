@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Seemless answer file for the Windows Setup boot (WinPE) phase (docs/03 path A).
+  Windows Setup finds this file in the root of the SEEMLESS payload disk.
+
+  The windowsPE pass runs apply.cmd from the payload disk, which installs
+  Windows itself with DISM and then reboots, so Setup's own pages never appear.
+
+  UNTESTED until spike S4: whether RunSynchronous fires on 24H2+ ARM64 media
+  (which uses the newer SetupHost flow) is exactly what S4 checks.
+
+  Placeholders (UPPER_CASE names in double braces) are filled by SeemlessKit
+  (SetupPayload.swift); rendering fails if any is left unfilled.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage>
+        <UILanguage>{{UI_LANGUAGE}}</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>{{INPUT_LOCALE}}</InputLocale>
+      <SystemLocale>{{UI_LANGUAGE}}</SystemLocale>
+      <UILanguage>{{UI_LANGUAGE}}</UILanguage>
+      <UserLocale>{{USER_LOCALE}}</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>Seemless: install Windows from the payload disk</Description>
+          <Path>cmd.exe /c "for %i in (C D E F G H I J K L M N O P Q R S T U V W Y Z) do @if exist %i:\seemless\SEEMLESS.MARK (call %i:\seemless\apply.cmd %i: &amp; exit /b)"</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+</unattend>

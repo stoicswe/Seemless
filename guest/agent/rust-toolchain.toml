@@ -1,0 +1,9 @@
+# Pinned to a rustup toolchain. Homebrew's cargo ignores this file, so run
+# rustup's cargo ($HOME/.cargo/bin/cargo); scripts/bootstrap.sh checks this.
+#
+# The Windows target is needed from M4 on and is not listed here, so plain
+# host builds never trigger a download. Add it with:
+#   rustup target add aarch64-pc-windows-msvc
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,11 @@
+[package]
+name = "session"
+description = "Per-user session agent: windows, capture, input assist, clipboard, shell integration (docs/06)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "seemless-agent"
+path = "src/main.rs"

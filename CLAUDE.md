@@ -13,6 +13,8 @@ and shows each Windows window as a native Mac window. The plan lives in
 
 ## Rules
 
+- Never commit, and never offer to. The owner makes all git commits. Leave
+  changes in the working tree and summarise what changed.
 - One work package per session. Finish with its acceptance check passing and
   paste the real output. Then update `docs/STATUS.md`.
 - If reality contradicts a doc, fix the doc in the same change. The docs are
@@ -42,10 +44,35 @@ and shows each Windows window as a native Mac window. The plan lives in
 `proto/` protobuf · `patches/` · `vendor/` submodules · `scripts/` ·
 `build/` (gitignored) · `docs/`.
 
-## Commands (fill in as they come into existence)
+## Commands
 
-- Bootstrap: `scripts/bootstrap.sh`
-- Host deps + QEMU: `scripts/build-deps.sh`, `scripts/build-qemu.sh`
-- Swift tests: `swift test --package-path kit`
-- Agent build: `cargo xwin build --manifest-path guest/agent/Cargo.toml --target aarch64-pc-windows-msvc --release`
-- Agent logic tests (run on macOS): `cargo test --manifest-path guest/agent/Cargo.toml -p windows-model`
+- Tool check: `scripts/bootstrap.sh` (`--strict` makes later-milestone tools fatal)
+- Everything that runs without a VM (also what CI runs): `scripts/check.sh`
+- Swift: `swift build --package-path kit`, `swift test --package-path kit`
+- CLI: `kit/.build/debug/seemlessctl --help`
+- Rust: always use rustup's cargo, `~/.cargo/bin/cargo`. On this Mac Homebrew's
+  `cargo` comes first on PATH and ignores `guest/agent/rust-toolchain.toml`
+  (pinned 1.99.1).
+- Agent logic tests (macOS): `~/.cargo/bin/cargo test --manifest-path guest/agent/Cargo.toml -p windows-model`
+- Agent Windows build (from M4; needs the target and cargo-xwin, see bootstrap):
+  `~/.cargo/bin/cargo xwin build --manifest-path guest/agent/Cargo.toml --target aarch64-pc-windows-msvc --release`
+- Host stack (S1): `scripts/build-deps.sh fetch`, then `scripts/build-deps.sh all`
+  (or named components; `--force <name>` to rebuild). Output in `build/prefix`,
+  logs in `build/logs/`.
+- VM (M1): `seemlessctl vm create|show|run|status|pause|resume|stop|delete`,
+  `seemlessctl disk info|snapshot|reset|resize`, `seemlessctl stack`. Use
+  `--root <dir>` for a throwaway storage root in experiments.
+- VM settings: `seemlessctl vm set` (cpus, memory, disk grow, boot order, TPM,
+  firmware wait, forwards), `vm media attach|detach|list`, `vm restart`,
+  `vm firmware reset-vars|reset-tpm`, `vm screendump --out x.png` (see the
+  guest screen yourself), `vm run --firmware-setup|--cd-prompt`.
+- App (WP3.0): `scripts/build-app.sh [--open]` → `build/app/Seemless.app`.
+  `SEEMLESS_ROOT=<dir>` for a throwaway root. Screenshot its window with
+  `screencapture -x -o -l <windowid>` (window id via CGWindowListCopyWindowInfo).
+- Windows image (M2): `seemlessctl image inspect <iso>`, `image build --iso`,
+  `image payload --out`, `image result`. Runbook: `docs/testing/first-iso.md`.
+- Tests: `swift test --package-path kit` (integration tests boot real QEMU to
+  firmware; they skip themselves if `build/prefix` is missing).
+- Smoke-boot the stack: `scripts/smoke-qemu.sh` (headless) or `--window`
+  (GL device; opens a window). Proves config and firmware boot only: the GPU
+  renderer starts on the first guest driver command, so it needs Windows (S2).

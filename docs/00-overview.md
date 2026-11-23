@@ -65,7 +65,8 @@ installers, real launchers.
 
 ## Non-goals
 
-- Intel Macs. x86 Windows guests. Windows 10. Linux/macOS guests.
+- Intel Macs. macOS earlier than 26. x86 Windows guests. Windows 10.
+  Linux/macOS guests.
 - Kernel-level anti-cheat titles (Vanguard, EAC/BattlEye in kernel mode,
   etc.). They detect or refuse VMs and/or lack ARM64 drivers. Do not promise
   these and do not attempt to hide the hypervisor.
