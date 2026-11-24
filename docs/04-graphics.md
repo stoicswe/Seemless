@@ -79,7 +79,8 @@ What has to exist, and who builds it:
 
 | Piece | State | Owner |
 |-------|-------|-------|
-| Neptune D3D12 protocol + guest D3D12 UMD | Announced by UTM as the next phase; not shipped as of 2026-11-23 | Upstream first; **we write our own if necessary** (see "Guest D3D12 driver" below) |
+| Neptune D3D12 protocol + guest D3D12 UMD | **Shipped upstream.** Triton implements the D3D12 DDI (`triton*12.c` on `utmapp/mesa` `neptune`), and the v0.6 driver package exports `OpenAdapter12`. Proven by UTM on D3DMetal only. The host loads the D3D12 backend from `NPT_D3D12_LIBRARY_PATH`; on Apple arm64 it defaults to DXMT, which has no D3D12 (WP7b.0) | Upstream. Our own only if the trigger below fires (it had not, 2026-11-23) |
+| vkd3d-proton for the `NPT_D3D12_LIBRARY_PATH` slot | Upstream keeps a Neptune fork (`osy/vkd3d-proton` `neptune`) for the Linux embedder path. On macOS arm64 the contract is plain calling convention, `D3D12CreateDevice` required, and the ABI check and heap import optional | Us (WP7.5) |
 | vkd3d-proton as a native macOS arm64 library | Upstream targets Wine/Proton on Linux; a native (non-Wine) build with the macOS WSI pieces removed or stubbed is our work, similar to what UTM did for DXMT (`dxmt-native`) | Us (S8, WP7.5) |
 | Cross-process shared textures and fences for the D3D12 backend | Required by Neptune/Triton (DWM composition, swapchains). Implement the same way as for DXMT: `shm_open`-backed `MTLBuffer`s, exposed through MoltenVK's Metal interop (`VK_EXT_metal_objects`) | Us (WP7.5) |
 | MoltenVK feature coverage | **The main risk.** vkd3d-proton assumes a modern desktop Vulkan driver. MoltenVK does not implement all of Vulkan, and UTM reports even DXVK (D3D11) on MoltenVK as unstable | S8 produces the exact gap list; then patch MoltenVK/vkd3d-proton, or pick KosmicKrisp where available |
@@ -114,7 +115,9 @@ The host backend can be exercised without any guest driver by replaying
 D3D12 calls from a host-side test harness.
 
 **Trigger for writing our own** (check at the end of M5, and again whenever
-upstream publishes D3D12 work):
+upstream publishes D3D12 work). Last review: 2026-11-23, **not fired**.
+Upstream's Triton already has a D3D12 path
+(`docs/spikes/WP7b0-d3d12-trigger-review.md`).
 
 - upstream has no public D3D12 UMD branch that renders a triangle in a
   Windows guest, or
@@ -188,33 +191,38 @@ UTM renders through SPICE/CocoaSpice. We do not (D4). We need:
 
 ### `ui/seemless` QEMU display backend (patch)
 
-S1 finding: QEMU's built-in `-display dbus` backend is compiled into our
-build and already exports scanouts and takes input from another process.
-**S3 evaluates `-display dbus` first**; write `ui/seemless` only if dbus
-cannot meet the latency, IOSurface or multi-scanout needs on macOS.
+`patches/qemu/0001-ui-seemless-display-backend.patch` (WP3.1); the patch
+header is the protocol reference. S3 ruled out `-display dbus`: it cannot
+drive `virtio-ramfb-gl` on macOS (no EGL init, no macOS texture export, and
+D-Bus cannot carry Mach ports). Note: `docs/spikes/S3-display-export.md`.
 
-Modelled on QEMU's existing `ui/cocoa.m` GL path and `ui/dbus-listener.c`
-(which already implements "export scanout to another process").
-
-- Listens on a unix socket. Per connection, a small binary protocol:
+- `-display seemless,gl=es,service=NAME`. QEMU checks in a Mach receive port
+  under the bootstrap name NAME (`DisplayExport.serviceName(for:)`: a hash of
+  the run directory). Only same-uid senders are accepted (security trailer).
+- Up to 8 clients `CONNECT` with a send right to their own port, so the app
+  and `seemlessctl screenshot` can watch the same VM.
 
   | Direction | Message | Payload |
   |-----------|---------|---------|
-  | Q→A | `ScanoutIOSurface` | scanout id, width, height, format, y-flip, IOSurface mach port (sent via `IOSurfaceCreateMachPort` over a bootstrap/XPC side channel, or `IOSurfaceID` if global lookup is acceptable; decide in S3) |
-  | Q→A | `Damage` | scanout id, rect list, frame serial, host timestamp |
-  | Q→A | `ScanoutDisabled` | scanout id |
-  | Q→A | `Cursor` | visible, hotspot, RGBA bitmap, position (when guest-drawn) |
-  | A→Q | `Key`, `PointerAbs`, `PointerRel`, `Button`, `Wheel` | QEMU input events with scanout id |
-  | A→Q | `SetDisplaySize` | scanout id, width, height, scale (→ virtio-gpu EDID/resize) |
-  | A→Q | `FrameAck` | serial (back-pressure) |
+  | A→Q | `CONNECT` | client port, version |
+  | Q→A | `SURFACES` | head, generation, size, fourcc, ring of 3 IOSurface Mach ports |
+  | Q→A | `FRAME` | head, generation, slot, serial, rect, `mach_absolute_time` stamps |
+  | Q→A | `DISABLE` | head (GL scanout gone) |
+  | Q→A | `CURSOR` | head, serial, size, hotspot, ARGB pixels (OOL) |
+  | Q→A | `MOUSE` | head, x, y, visible |
+  | A→Q | `ACK` | head, generation, slot being read (back-pressure) |
+  | A→Q | `SET_SIZE` | head, width, height, mm (→ `dpy_set_ui_info`, EDID) |
 
-- In the GL/ANGLE path the scanout is a texture; blit (or ideally bind) to an
-  IOSurface-backed texture. One GPU copy per frame is acceptable for v1;
-  zero-copy via shared `MTLTexture` handles is an M7 optimisation (the Triton
-  post notes `MTLSharedTextureHandle` + XPC is the fastest route).
-- Before guest drivers load (firmware, WinPE, safe mode) the scanout is a
-  pixman software surface: upload it to the same IOSurface so the app has one
-  code path.
+- Input is not on this channel: the host sends QMP `input-send-event`
+  (S3: ~1 ms round trip).
+- 2D surfaces (firmware, WinPE, Basic Display): CPU copy into the next free
+  slot. Metal scanouts from virgl/Neptune: one GPU blit at
+  `RESOURCE_FLUSH`, one in flight (the guest buffer is only intact until the
+  next flip, as in `ui/cocoa.m`). Zero-copy via shared `MTLTexture` handles
+  remains an M7 optimisation.
+- Host side: `SeemlessKit.DisplayClient` (Swift, Mach plumbing in the
+  `CSeemlessDisplay` C target; no QEMU code). `LaunchOptions.Display.exported`
+  starts QEMU this way; the app keeps `cocoa` until WP3.2.
 
 ### App-side renderer
 
@@ -272,7 +280,7 @@ Modelled on QEMU's existing `ui/cocoa.m` GL path and `ui/dbus-listener.c`
 - `seemlessctl gfx info`: active backend, render-server PIDs/architecture,
   capsets negotiated, driver versions reported by the agent.
 - Env passthrough: `VIRGL_LOG_LEVEL`, DXMT, vkd3d-proton (`VKD3D_DEBUG`), MoltenVK (`MVK_CONFIG_*`) and D3DMetal debug variables.
-- Frame capture: dump any scanout IOSurface to PNG (`seemlessctl screenshot
+- Frame capture ✅ (WP3.1): dump any scanout IOSurface to PNG (`seemlessctl screenshot
   --scanout N`). This is the primary verification tool for agents working on
   this project, since they cannot look at the screen directly.
 - Guest-side: agent command to run `dxdiag /t` and return the file.

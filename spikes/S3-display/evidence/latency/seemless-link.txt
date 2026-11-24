@@ -1,0 +1,17 @@
+# seemless-link (seemless ) Mon Nov 23 19:16:48 EST 2026
+n=40 misses=0  min 36.1  p50 56.0  mean 57.1  p90 73.1  max 81.0 ms
+raw: 38.6 55.2 57.7 45.3 52.7 58.9 57.3 56.0 53.8 63.7 44.5 63.8 52.5 53.1 81.0 43.5 36.5 58.7 49.0 36.1 52.3 58.8 43.3 61.6 56.5 69.4 73.5 68.4 55.2 76.7 73.1 64.6 54.5 61.1 75.7 53.2 44.2 57.2 53.7 72.7
+frames received 859, presented 854, replaced before display 3
+QEMU copy into IOSurface n= 854  p50   0.06  p90   0.17  p99   0.49 ms
+Mach message n= 854  p50   0.01  p90   0.04  p99   2.38 ms
+wait for display link n= 854  p50   4.12  p90   7.20  p99   8.27 ms
+draw + present n= 854  p50  16.12  p90  24.45  p99  24.46 ms
+total update→on glass n= 854  p50  24.05  p90  31.10  p99  33.25 ms
+QMP input round trip n= 144  p50   0.49  p90   0.61  p99   0.96 ms
+frames received 874, presented 869, replaced before display 3
+QEMU copy into IOSurface n= 869  p50   0.06  p90   0.17  p99   0.49 ms
+Mach message n= 869  p50   0.01  p90   0.04  p99   2.38 ms
+wait for display link n= 869  p50   4.10  p90   7.20  p99   8.27 ms
+draw + present n= 869  p50  16.12  p90  24.45  p99  24.46 ms
+total update→on glass n= 869  p50  24.14  p90  31.10  p99  33.25 ms
+QMP input round trip n= 144  p50   0.49  p90   0.61  p99   0.96 ms

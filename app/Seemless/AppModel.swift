@@ -33,8 +33,27 @@ final class AppModel {
     var showingNewVM = false
     /// Unattended builds started from this app, by VM name.
     private(set) var builds: [String: BuildProgress] = [:]
+    /// Last screenshot taken here, shown in a preview sheet.
+    var screenshot: ScreenshotResult?
+    /// VMs currently in Zen mode (docs/05; Z1 preview).
+    private(set) var zenSessions: [String: ZenSession] = [:]
+    func isInZen(_ name: String) -> Bool { zenSessions[name] != nil }
+    /// VMs whose Zen session is connecting (so a second Enter does not start another).
+    private var zenStarting: Set<String> = []
+
+    struct ScreenshotResult: Identifiable {
+        let id = UUID()
+        var vm: String
+        var file: URL
+        var image: NSImage
+        var shot: VMScreenshot
+    }
 
     private var pollTask: Task<Void, Never>?
+    private var launchSwitchesDone = false
+    /// Set by `SEEMLESS_OPEN=select:<vm>`; applied by a later refresh, after
+    /// the sidebar list has settled its initial selection.
+    private var pendingSelection: String?
     private var lastDiskRefresh: [String: Date] = [:]
 
     struct AppError: Identifiable {
@@ -48,11 +67,42 @@ final class AppModel {
     init(layout: StorageLayout = AppModel.defaultLayout()) {
         self.layout = layout
         self.assets = ImageAssets.locate()
+        // Developer switch for screenshot checks (no UI automation needed):
+        // SEEMLESS_OPEN=new-vm opens the New VM sheet at launch.
+        showingNewVM = ProcessInfo.processInfo.environment["SEEMLESS_OPEN"]?.hasPrefix("new-vm") == true
+        // SEEMLESS_OPEN=select:<vm> starts with that VM selected.
+        if let open = ProcessInfo.processInfo.environment["SEEMLESS_OPEN"], open.hasPrefix("select:") {
+            let vm = String(open.dropFirst("select:".count))
+            pendingSelection = vm
+            selection = vm
+        }
         if let stack = HostStack.locate(), stack.missingFiles().isEmpty {
             environment = .ready(VMManager(layout: layout, stack: stack))
         } else {
             environment = .stackMissing(HostStack.locate()?.missingFiles() ?? ["build/prefix (run scripts/build-deps.sh all)"])
         }
+    }
+
+    /// Developer switches, run once from ContentView (checks without UI automation):
+    /// SEEMLESS_OPEN=screenshot:<vm> selects a running VM and takes a screenshot;
+    /// SEEMLESS_OPEN=select:<vm> only selects it.
+    func runLaunchSwitches() async {
+        guard !launchSwitchesDone else { return }
+        launchSwitchesDone = true
+        guard let open = ProcessInfo.processInfo.environment["SEEMLESS_OPEN"] else { return }
+        if open.hasPrefix("select:") { return }  // handled in init and refresh
+        if open.hasPrefix("zen:") {
+            let vm = String(open.dropFirst("zen:".count))
+            await refresh()
+            selection = vm
+            enterZen(vm)
+            return
+        }
+        guard open.hasPrefix("screenshot:") else { return }
+        let vm = String(open.dropFirst("screenshot:".count))
+        await refresh()
+        selection = vm
+        takeScreenshot(vm)
     }
 
     nonisolated static func defaultLayout() -> StorageLayout {
@@ -92,8 +142,14 @@ final class AppModel {
         }
         if next != items { items = next }
         if listed.broken != broken { broken = listed.broken }
-        if let selection, !items.contains(where: { $0.id == selection }) { self.selection = nil }
-        if selection == nil { selection = items.first?.id }
+        if let pending = pendingSelection, items.contains(where: { $0.id == pending }) {
+            pendingSelection = nil
+            selection = pending
+        }
+        if pendingSelection == nil {
+            if let selection, !items.contains(where: { $0.id == selection }) { self.selection = nil }
+            if selection == nil { selection = items.first?.id }
+        }
         for item in items where shouldRefreshDisk(item.id) {
             lastDiskRefresh[item.id] = Date()
             if let info = try? await manager.diskInfo(item.id) { diskInfo[item.id] = info }
@@ -125,9 +181,33 @@ final class AppModel {
         }
     }
 
-    func start(_ name: String, keys: BootKeys? = nil, paused: Bool = false) {
+    /// `exportDisplay` starts QEMU without its window, exporting the screen
+    /// for screenshots (`-display seemless`) until the app has its own
+    /// display (WP3.2).
+    func start(_ name: String, keys: BootKeys? = nil, paused: Bool = false, exportDisplay: Bool = false) {
         perform(name, "Couldn’t start “\(name)”") { m in
-            try await m.start(name, options: LaunchOptions(display: .cocoaWindow, bootKeys: keys), resume: !paused)
+            let display: LaunchOptions.Display = exportDisplay ? .exported : .cocoaWindow
+            try await m.start(name, options: LaunchOptions(display: display, bootKeys: keys), resume: !paused)
+        }
+    }
+
+    /// Saves the VM's screen where macOS saves screenshots and shows it.
+    /// Not marked busy: it does not change the VM.
+    func takeScreenshot(_ name: String) {
+        guard let manager else { return }
+        Task {
+            do {
+                let shot = try await manager.screenshot(name)
+                // SEEMLESS_SCREENSHOT_DIR: developer override (checks without touching the Desktop).
+                let dir = ProcessInfo.processInfo.environment["SEEMLESS_SCREENSHOT_DIR"]
+                    .map { URL(filePath: $0, directoryHint: .isDirectory) } ?? VMScreenshot.defaultDirectory()
+                let file = dir.appending(path: VMScreenshot.fileName(vm: name))
+                try shot.png.write(to: file)
+                guard let image = NSImage(data: shot.png) else { return }
+                screenshot = ScreenshotResult(vm: name, file: file, image: image, shot: shot)
+            } catch {
+                self.error = AppError(title: "Couldn’t take a screenshot of “\(name)”", message: String(describing: error))
+            }
         }
     }
 
@@ -189,6 +269,47 @@ final class AppModel {
 
     /// Brings QEMU's display window to the front (until the app has its own
     /// display path, WP3.2).
+    // MARK: Zen mode
+
+    /// Shows the VM's Windows windows as chrome-less Mac windows (Z1 preview).
+    /// Needs a VM started with an exported display ("Start without Window").
+    /// The window list comes from the VM's agent channel, or from the socket
+    /// in SEEMLESS_ZEN_AGENT (a `seemlessctl mock-agent`) until the Windows
+    /// agent exists (WP4.2). SEEMLESS_ZEN_SCALE sets Mac points per guest pixel.
+    func enterZen(_ name: String) {
+        guard zenSessions[name] == nil, !zenStarting.contains(name), let manager else { return }
+        guard let remote = VMRemote.attach(manager.store.files(for: name)) else {
+            error = AppError(title: "Zen mode needs a running VM", message: "Start “\(name)” first.")
+            return
+        }
+        let env = ProcessInfo.processInfo.environment
+        let agentSocket = env["SEEMLESS_ZEN_AGENT"].map { URL(filePath: $0) } ?? remote.record.run.agentSocket
+        let scale = env["SEEMLESS_ZEN_SCALE"].flatMap(Double.init).map { CGFloat($0) } ?? 1
+        zenStarting.insert(name)
+        Task {
+            defer { zenStarting.remove(name) }
+            do {
+                let session = try await ZenSession.start(vm: name, run: remote.record.run, agentSocket: agentSocket,
+                                                         pointsPerPixel: scale)
+                // The model lives as long as the app, so a strong capture is fine.
+                // Only this session's own end clears the entry: after Exit and
+                // a quick re-enter the entry belongs to the new session.
+                session.onEnd = { ended, reason in
+                    guard self.zenSessions[ended.vm] === ended else { return }
+                    self.zenSessions[ended.vm] = nil
+                    if let reason { self.error = AppError(title: "Zen mode ended for “\(ended.vm)”", message: reason) }
+                }
+                zenSessions[name] = session
+            } catch {
+                self.error = AppError(title: "Couldn’t enter Zen mode", message: String(describing: error))
+            }
+        }
+    }
+
+    func exitZen(_ name: String) {
+        zenSessions.removeValue(forKey: name)?.stop()
+    }
+
     func showDisplay(_ name: String) {
         guard let pid = item(name)?.status.qemuPID,
               let app = NSRunningApplication(processIdentifier: pid) else { return }
@@ -265,6 +386,66 @@ final class AppModel {
     }
 
     func dismissBuild(_ name: String) { builds[name] = nil }
+
+    // MARK: Open in Seemless
+
+    /// Installers waiting for the person to pick a VM and confirm.
+    var launchRequest: LaunchRequest?
+
+    struct LaunchRequest: Identifiable {
+        let id = UUID()
+        var files: [URL]
+        var rejected: [URL]
+    }
+
+    func requestLaunch(_ urls: [URL]) {
+        let files = urls.filter(GuestLaunch.isSupported)
+        let rejected = urls.filter { !GuestLaunch.isSupported($0) }
+        if var existing = launchRequest {
+            existing.files += files.filter { !existing.files.contains($0) }
+            existing.rejected += rejected
+            launchRequest = existing
+        } else {
+            launchRequest = LaunchRequest(files: files, rejected: rejected)
+        }
+    }
+
+    /// The VM an installer goes to by default: the only running one, else
+    /// the selected one, else the first.
+    var defaultLaunchTarget: String? {
+        let running = items.filter { $0.status.state == .running || $0.status.state == .paused }
+        if running.count == 1 { return running[0].id }
+        return selection ?? items.first?.id
+    }
+
+    /// Starts or resumes the VM if needed, then hot-plugs one launch drive
+    /// per installer. Returns an error message, or nil on success.
+    func sendInstallers(_ files: [URL], to name: String) async -> String? {
+        guard let manager else { return "The host stack is not built." }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            switch await manager.status(of: name).state {
+            case .stopped, .crashed:
+                try await manager.start(name, options: LaunchOptions(display: .cocoaWindow))
+            case .paused:
+                try await manager.resume(name)
+            case .starting, .stopping:
+                return "“\(name)” is busy starting or stopping. Try again in a moment."
+            case .running:
+                break
+            }
+            for file in files {
+                try await manager.launch(name, installer: file, assets: assets)
+            }
+            await refresh()
+            showDisplay(name)
+            return nil
+        } catch {
+            await refresh()
+            return String(describing: error)
+        }
+    }
 
     // MARK: Quit
 

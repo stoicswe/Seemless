@@ -47,10 +47,42 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>NSSupportsAutomaticTermination</key><false/>
+  <!-- "Open in Seemless" (GuestLaunch): Open With for Windows installers,
+       as an alternate handler so Seemless never becomes their default app. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Windows Program</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key><array><string>com.microsoft.windows-executable</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key><string>Windows Installer Package</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>CFBundleTypeExtensions</key><array><string>msi</string><string>MSI</string></array>
+    </dict>
+  </array>
+  <!-- Finder right-click > Services / Quick Actions > Open in Seemless -->
+  <key>NSServices</key>
+  <array>
+    <dict>
+      <key>NSMenuItem</key><dict><key>default</key><string>Open in Seemless</string></dict>
+      <key>NSMessage</key><string>openInSeemless</string>
+      <key>NSPortName</key><string>Seemless</string>
+      <key>NSRequiredContext</key><dict/>
+      <key>NSSendFileTypes</key>
+      <array><string>com.microsoft.windows-executable</string><string>com.microsoft.windows-installer</string></array>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST
 
 codesign --force --sign - "$bundle" >/dev/null
+# Register with Launch Services so Finder offers Open With / the service.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$bundle" || true
+/System/Library/CoreServices/pbs -update || true
 echo "$bundle"
 if [[ $open_after == 1 ]]; then open "$bundle"; fi

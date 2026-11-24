@@ -1,0 +1,21 @@
+Windows Registry Editor Version 5.00
+
+; Default user profile (copied to the Seemless account at first logon).
+
+; No OneDrive setup at first logon (OneDriveSetup.exe is deleted)
+[HKEY_LOCAL_MACHINE\zSEEMLESS_NTUSER\Software\Microsoft\Windows\CurrentVersion\Run]
+"OneDriveSetup"=-
+
+; No silently installed suggested apps, tips or Start suggestions
+[HKEY_LOCAL_MACHINE\zSEEMLESS_NTUSER\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager]
+"ContentDeliveryAllowed"=dword:00000000
+"OemPreInstalledAppsEnabled"=dword:00000000
+"PreInstalledAppsEnabled"=dword:00000000
+"PreInstalledAppsEverEnabled"=dword:00000000
+"SilentInstalledAppsEnabled"=dword:00000000
+"SoftLandingEnabled"=dword:00000000
+"SystemPaneSuggestionsEnabled"=dword:00000000
+
+; Copilot off
+[HKEY_LOCAL_MACHINE\zSEEMLESS_NTUSER\Software\Policies\Microsoft\Windows\WindowsCopilot]
+"TurnOffWindowsCopilot"=dword:00000001

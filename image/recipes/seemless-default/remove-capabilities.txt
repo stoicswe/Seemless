@@ -1,0 +1,16 @@
+# Capabilities removed by seemless-default. Exact identities from
+# inventory/<build>/capabilities.txt (state "Installed").
+# Kept: DirectX.Configuration.Database (games), VBSCRIPT (old installers'
+# MSI custom actions), OpenSSH.Client, Notepad.System, OneSync, language
+# Speech/TTS/OCR (accessibility, Snipping Tool text actions).
+# Language.Handwriting is per-locale, so it is not in a fixed list.
+# Microsoft.Windows.Sense.Client (Defender for Endpoint) cannot be removed:
+# DISM returns 0x800F0825 (permanent package), seen in the 26300 build.
+App.StepsRecorder~~~~0.0.1.0
+Browser.InternetExplorer~~~~0.0.11.0
+Hello.Face.20134~~~~0.0.1.0
+MathRecognizer~~~~0.0.1.0
+Media.WindowsMediaPlayer~~~~0.0.12.0
+Microsoft.Wallpapers.Extended~~~~0.0.1.0
+Microsoft.Windows.PowerShell.ISE~~~~0.0.1.0
+Print.Management.Console~~~~0.0.1.0

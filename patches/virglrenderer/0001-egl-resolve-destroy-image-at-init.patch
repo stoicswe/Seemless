@@ -1,0 +1,94 @@
+vrend/egl: resolve eglDestroyImageKHR at init, not on first destroy
+
+QEMU aborts on a virtio-gpu reset (often the first device reset of a cold
+boot) with:
+
+    No provider of eglDestroyImageKHR found.  Requires one of:
+        EGL_KHR_image / EGL_KHR_image_base / EGL 15
+
+libepoxy resolves EGL extension entry points lazily and checks providers
+against eglGetCurrentDisplay(). virtio_gpu_reset can run the first
+virgl_egl_image_destroy() on a thread with no EGL context current, so the
+current display is EGL_NO_DISPLAY and libepoxy calls abort().
+
+Making virgl's context current before the destroy (the first attempt at
+this fix) does not work for QEMU: it uses virgl_egl_init_external(), where
+virgl owns no context (egl_ctx is NULL), so eglMakeCurrent just releases.
+
+Resolve the entry point once at init with eglGetProcAddress (core EGL 1.0,
+which libepoxy resolves without a display check) and destroy through it.
+
+Applies to utmapp/virglrenderer dd0652b. Upstream-ready; licence MIT, like
+virglrenderer. Seemless S2, 2026-11-23.
+---
+diff --git a/src/vrend/vrend_winsys_egl.c b/src/vrend/vrend_winsys_egl.c
+index 184a5ee..19b9ef2 100644
+--- a/src/vrend/vrend_winsys_egl.c
++++ b/src/vrend/vrend_winsys_egl.c
+@@ -107,6 +107,8 @@ struct virgl_egl {
+    EGLSyncKHR signaled_fence;
+    bool different_gpu;
+    struct egl_funcs funcs;
++   /* Resolved once at init; see virgl_egl_image_destroy(). */
++   PFNEGLDESTROYIMAGEKHRPROC destroy_image;
+ #ifdef WIN32
+    ID3D11Device *d3d11_device;
+ #endif
+@@ -189,6 +191,29 @@ static bool virgl_egl_add_extensions(struct virgl_egl *egl, const char *extensio
+    return virgl_egl_get_funcs(egl);
+ }
+ 
++/*
++ * Look up eglDestroyImageKHR once, while initialising, and call it through
++ * this pointer afterwards.
++ *
++ * libepoxy resolves EGL extension entry points lazily, on first call, and its
++ * provider check reads eglGetCurrentDisplay(). The first destroy can happen
++ * from QEMU's virtio_gpu_reset on a thread with no EGL context current (for
++ * example the first device reset of a cold boot), where the current display
++ * is EGL_NO_DISPLAY: libepoxy then finds no provider and calls abort(),
++ * taking QEMU down. Making a context current there is not enough: with an
++ * external display (virgl_egl_init_external, as QEMU uses) virgl owns no
++ * context, and a context may be current on another thread. eglGetProcAddress
++ * is core EGL 1.0, which libepoxy resolves without a display check.
++ */
++static void virgl_egl_resolve_destroy_image(struct virgl_egl *egl)
++{
++   egl->destroy_image =
++      (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
++   if (!egl->destroy_image)
++      egl->destroy_image =
++         (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImage");
++}
++
+ static bool virgl_egl_check_extensions(struct virgl_egl *egl)
+ {
+    if (!has_bits(egl->extension_bits, EGL_KHR_SURFACELESS_CONTEXT | EGL_KHR_CREATE_CONTEXT)) {
+@@ -408,6 +433,7 @@ struct virgl_egl *virgl_egl_init(EGLNativeDisplayType display_id, bool surfacele
+ 
+    if (!virgl_egl_check_extensions(egl))
+       goto fail;
++   virgl_egl_resolve_destroy_image(egl);
+ 
+    if (gles)
+       api = EGL_OPENGL_ES_API;
+@@ -685,6 +711,7 @@ struct virgl_egl *virgl_egl_init_external(EGLDisplay egl_display)
+ 
+    if (!virgl_egl_check_extensions(egl))
+       goto fail;
++   virgl_egl_resolve_destroy_image(egl);
+ 
+ #ifdef ENABLE_GBM
+    gbm = virgl_gbm_init(-1);
+@@ -926,7 +953,10 @@ void *virgl_egl_image_from_dmabuf(struct virgl_egl *egl,
+ #if defined(ENABLE_GBM) || defined(ENABLE_METAL)
+ void virgl_egl_image_destroy(struct virgl_egl *egl, void *image)
+ {
+-   eglDestroyImageKHR(egl->egl_display, image);
++   if (egl->destroy_image)
++      egl->destroy_image(egl->egl_display, image);
++   else
++      eglDestroyImageKHR(egl->egl_display, image);
+ }
+ #endif
+ 

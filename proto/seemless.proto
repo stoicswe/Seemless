@@ -1,0 +1,528 @@
+// Seemless host <-> guest agent protocol, v1 (docs/06-guest-agent-protocol.md).
+//
+// The message catalogue in docs/06 is the contract; this file implements it.
+// Single source of truth for Swift (`scripts/gen-proto.sh` -> SeemlessKit)
+// and Rust (`guest/agent/crates/proto/build.rs`).
+//
+// Wire: every message is an `Envelope`, sent as a frame
+//   u32 length (little endian) | u8 kind | payload
+// where `length` is the payload length (the kind byte is not counted),
+// kind 0 = Envelope, 1 = raw bulk chunk (bulk port only).
+//
+// Compatibility rules:
+// - Never renumber or reuse a field number; reserve removed ones.
+// - New optional behaviour is gated on a capability string in `Hello`,
+//   not on protocol_minor.
+// - A breaking change bumps protocol_major.
+// - No `map` fields: golden-frame tests need deterministic encoding.
+
+syntax = "proto3";
+
+package seemless.v1;
+
+// ---------------------------------------------------------------------------
+// Envelope
+
+message Envelope {
+  // Sender's sequence number, starting at 1 and increasing per connection.
+  uint64 seq = 1;
+  // For a response: the `seq` of the request it answers. 0 for events and
+  // requests.
+  uint64 reply_to = 2;
+
+  oneof body {
+    // Session and system: 10-39
+    Hello hello = 10;
+    Ping ping = 11;
+    Pong pong = 12;
+    Error error = 13;
+    Ack ack = 14;
+    SessionState session_state = 20;
+    SetHostInfo set_host_info = 21;
+    TimeSync time_sync = 22;
+    Shutdown shutdown = 23;
+    GetGuestInfo get_guest_info = 24;
+    GuestInfo guest_info = 25;
+    UpdateTools update_tools = 26;
+
+    // Windows (seamless): 40-69
+    WindowSnapshot window_snapshot = 40;
+    WindowAdded window_added = 41;
+    WindowUpdated window_updated = 42;
+    WindowRemoved window_removed = 43;
+    AtlasFrame atlas_frame = 44;
+    ForegroundChanged foreground_changed = 45;
+    PointerFocus pointer_focus = 46;
+    Activate activate = 47;
+    Activated activated = 48;
+    Deactivate deactivate = 49;
+    SetWindowRect set_window_rect = 50;
+    WindowCommand window_command = 51;
+    HitTest hit_test = 52;
+    HitTestResult hit_test_result = 53;
+    CursorState cursor_state = 54;
+    FullscreenState fullscreen_state = 55;
+
+    // Apps and shell: 70-99
+    ListApps list_apps = 70;
+    AppList app_list = 71;
+    AppsChanged apps_changed = 72;
+    GetIcon get_icon = 73;
+    BulkOffer bulk_offer = 74;
+    Launch launch = 75;
+    OpenOnHost open_on_host = 76;
+    Notification notification = 77;
+    TrayItems tray_items = 78;
+    TrayInvoke tray_invoke = 79;
+    RunCommand run_command = 80;
+    RunCommandResult run_command_result = 81;
+
+    // Clipboard and drag and drop: 100-119
+    ClipboardOffer clipboard_offer = 100;
+    ClipboardRequest clipboard_request = 101;
+    DragEnter drag_enter = 102;
+    DragMove drag_move = 103;
+    DragLeave drag_leave = 104;
+    Drop drop = 105;
+    DragStart drag_start = 106;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared types
+
+message Rect {
+  int32 x = 1;
+  int32 y = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+}
+
+message Point {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message Size {
+  uint32 width = 1;
+  uint32 height = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Session and system
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_HOST = 1;
+  // seemless-agent-svc (owns the ports; relays for the session agent).
+  ROLE_GUEST_SERVICE = 2;
+}
+
+// Both sides send Hello first on every connect.
+message Hello {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+  // Free-form build string, e.g. "seemless-agent 0.0.1 (abc1234)".
+  string build = 3;
+  // Feature flags, e.g. "windows.v1", "clipboard.v1". Features are used only
+  // when both sides list them.
+  repeated string capabilities = 4;
+  Role role = 5;
+}
+
+message Ping {
+  uint64 nonce = 1;
+}
+
+message Pong {
+  uint64 nonce = 1;
+}
+
+// Reply to a request that failed or is not supported.
+message Error {
+  enum Code {
+    CODE_UNSPECIFIED = 0;
+    CODE_UNSUPPORTED = 1;
+    CODE_INVALID = 2;
+    CODE_DENIED = 3;
+    CODE_INTERNAL = 4;
+    CODE_BUSY = 5;
+  }
+  Code code = 1;
+  string message = 2;
+}
+
+// Empty success reply for requests that return nothing.
+message Ack {}
+
+message SessionState {
+  bool logged_on = 1;
+  bool locked = 2;
+  string user = 3;
+  bool secure_desktop = 4;
+}
+
+enum Appearance {
+  APPEARANCE_UNSPECIFIED = 0;
+  APPEARANCE_LIGHT = 1;
+  APPEARANCE_DARK = 2;
+}
+
+message HostDisplay {
+  uint32 id = 1;
+  Rect frame = 2;
+  // Backing scale, e.g. 2.0 on Retina.
+  double scale = 3;
+  uint32 refresh_hz = 4;
+}
+
+message SetHostInfo {
+  repeated HostDisplay displays = 1;
+  double scale = 2;
+  Rect work_area = 3;
+  // BCP 47, e.g. "en-US".
+  string locale = 4;
+  // macOS input source id, e.g. "com.apple.keylayout.US".
+  string keyboard_layout = 5;
+  // IANA zone, e.g. "Europe/Berlin".
+  string timezone = 6;
+  Appearance appearance = 7;
+}
+
+message TimeSync {
+  int64 unix_nanos = 1;
+}
+
+message Shutdown {
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    MODE_SHUTDOWN = 1;
+    MODE_RESTART = 2;
+    MODE_LOGOFF = 3;
+    MODE_HIBERNATE = 4;
+  }
+  Mode mode = 1;
+}
+
+// Request; the reply is GuestInfo.
+message GetGuestInfo {}
+
+message DriverVersion {
+  string name = 1;
+  string version = 2;
+}
+
+message GuestInfo {
+  // e.g. "10.0.26300.9457"
+  string os_build = 1;
+  repeated DriverVersion driver_versions = 2;
+  string agent_version = 3;
+  string gpu_adapter = 4;
+}
+
+message UpdateTools {
+  string iso_volume_label = 1;
+  string version = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Windows (seamless), docs/05
+
+enum WindowKind {
+  WINDOW_KIND_UNSPECIFIED = 0;
+  WINDOW_KIND_NORMAL = 1;
+  WINDOW_KIND_DIALOG = 2;
+  WINDOW_KIND_MENU = 3;
+  WINDOW_KIND_TOOLTIP = 4;
+  WINDOW_KIND_POPUP = 5;
+  WINDOW_KIND_SPLASH = 6;
+  WINDOW_KIND_TOOL = 7;
+}
+
+enum WindowShowState {
+  WINDOW_SHOW_STATE_UNSPECIFIED = 0;
+  WINDOW_SHOW_STATE_NORMAL = 1;
+  WINDOW_SHOW_STATE_MINIMIZED = 2;
+  WINDOW_SHOW_STATE_MAXIMIZED = 3;
+}
+
+message WindowFlags {
+  bool resizable = 1;
+  bool topmost = 2;
+  bool has_alpha = 3;
+}
+
+message Window {
+  // Agent-assigned, never a raw HWND (HWNDs are reused).
+  uint64 id = 1;
+  uint64 owner_id = 2;
+  WindowKind kind = 3;
+  Rect rect = 4;
+  string title = 5;
+  string app_key = 6;
+  uint32 pid = 7;
+  WindowShowState state = 8;
+  WindowFlags flags = 9;
+  uint64 icon_id = 10;
+}
+
+// Field numbers of `Window`, for WindowUpdated.changed.
+enum WindowField {
+  WINDOW_FIELD_UNSPECIFIED = 0;
+  WINDOW_FIELD_OWNER_ID = 2;
+  WINDOW_FIELD_KIND = 3;
+  WINDOW_FIELD_RECT = 4;
+  WINDOW_FIELD_TITLE = 5;
+  WINDOW_FIELD_APP_KEY = 6;
+  WINDOW_FIELD_PID = 7;
+  WINDOW_FIELD_STATE = 8;
+  WINDOW_FIELD_FLAGS = 9;
+  WINDOW_FIELD_ICON_ID = 10;
+}
+
+// Full state; after any reconnect the host discards what it had.
+message WindowSnapshot {
+  // Back-to-front z order.
+  repeated Window windows = 1;
+}
+
+message WindowAdded {
+  Window window = 1;
+}
+
+// Only the fields listed in `changed` are meaningful in `window`.
+message WindowUpdated {
+  Window window = 1;
+  repeated WindowField changed = 2;
+}
+
+message WindowRemoved {
+  uint64 id = 1;
+}
+
+message AtlasEntry {
+  uint64 id = 1;
+  Rect atlas_rect = 2;
+  Size content_size = 3;
+}
+
+message AtlasFrame {
+  uint64 serial = 1;
+  repeated AtlasEntry entries = 2;
+}
+
+message ForegroundChanged {
+  uint64 id = 1;
+}
+
+message PointerFocus {
+  uint64 id = 1;
+}
+
+message Activate {
+  uint64 id = 1;
+}
+
+message Activated {
+  uint64 id = 1;
+}
+
+message Deactivate {}
+
+message SetWindowRect {
+  uint64 id = 1;
+  Rect rect = 2;
+  uint32 flags = 3;
+}
+
+message WindowCommand {
+  enum Command {
+    COMMAND_UNSPECIFIED = 0;
+    COMMAND_CLOSE = 1;
+    COMMAND_MINIMIZE = 2;
+    COMMAND_RESTORE = 3;
+    COMMAND_MAXIMIZE = 4;
+  }
+  uint64 id = 1;
+  Command cmd = 2;
+}
+
+// Request; the reply is HitTestResult.
+message HitTest {
+  uint64 id = 1;
+  Point point = 2;
+}
+
+message HitTestResult {
+  // Win32 WM_NCHITTEST code (HTCLIENT = 1, HTCAPTION = 2, ...).
+  int32 code = 1;
+}
+
+message CursorState {
+  bool visible = 1;
+  bool clipped = 2;
+  Rect clip_rect = 3;
+}
+
+message FullscreenState {
+  uint64 id = 1;
+  bool exclusive = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Apps and shell
+
+// Request; the reply is AppList.
+message ListApps {}
+
+message App {
+  enum Source {
+    SOURCE_UNSPECIFIED = 0;
+    SOURCE_START_MENU = 1;
+    SOURCE_UWP = 2;
+    SOURCE_RUNNING = 3;
+  }
+  string app_key = 1;
+  string name = 2;
+  string exe = 3;
+  repeated string args = 4;
+  uint64 icon_id = 5;
+  Source source = 6;
+}
+
+message AppList {
+  repeated App apps = 1;
+}
+
+message AppsChanged {}
+
+// Request; the reply is BulkOffer, then the PNG arrives on the bulk port.
+message GetIcon {
+  uint64 icon_id = 1;
+  // 32, 64, 256 or 512.
+  uint32 size = 2;
+}
+
+// Announces a bulk transfer before any raw chunk is sent, so the receiver
+// can enforce its cap up front.
+message BulkOffer {
+  uint64 transfer_id = 1;
+  uint64 total_bytes = 2;
+  // MIME type, e.g. "image/png", "text/plain;charset=utf-8".
+  string content_type = 3;
+}
+
+message Launch {
+  oneof target {
+    string app_key = 1;
+    string path = 2;
+  }
+  repeated string args = 3;
+  repeated string files = 4;
+  // Shell verb, e.g. "open", "edit". Empty means the default verb.
+  string verb = 5;
+}
+
+message OpenOnHost {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_URL = 1;
+    KIND_PATH = 2;
+  }
+  Kind kind = 1;
+  string value = 2;
+}
+
+message Notification {
+  string app_key = 1;
+  string title = 2;
+  string body = 3;
+  uint64 icon_id = 4;
+  string tag = 5;
+}
+
+message TrayItem {
+  uint64 id = 1;
+  string tooltip = 2;
+  uint64 icon_id = 3;
+}
+
+message TrayItems {
+  repeated TrayItem items = 1;
+}
+
+message TrayInvoke {
+  enum Action {
+    ACTION_UNSPECIFIED = 0;
+    ACTION_PRIMARY = 1;
+    ACTION_SECONDARY = 2;
+    ACTION_CONTEXT_MENU = 3;
+  }
+  uint64 id = 1;
+  Action action = 2;
+}
+
+// Diagnostics and scripted setup only; never driven by untrusted input.
+message RunCommand {
+  string exe = 1;
+  repeated string args = 2;
+  bool elevated = 3;
+  bool capture_output = 4;
+}
+
+message RunCommandResult {
+  int32 exit_code = 1;
+  // Truncated by the agent to the control channel's limits.
+  string stdout = 2;
+  string stderr = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Clipboard and drag and drop
+
+enum DataFormat {
+  DATA_FORMAT_UNSPECIFIED = 0;
+  DATA_FORMAT_TEXT = 1;
+  DATA_FORMAT_RTF = 2;
+  DATA_FORMAT_HTML = 3;
+  DATA_FORMAT_PNG = 4;
+  DATA_FORMAT_FILE_LIST = 5;
+}
+
+// Lazy: formats are announced, data is fetched on paste.
+message ClipboardOffer {
+  uint64 serial = 1;
+  repeated DataFormat formats = 2;
+}
+
+// Request; the reply is BulkOffer, then the data on the bulk port.
+message ClipboardRequest {
+  uint64 serial = 1;
+  DataFormat format = 2;
+}
+
+message DragEnter {
+  uint64 window_id = 1;
+  Point point = 2;
+  repeated DataFormat formats = 3;
+}
+
+message DragMove {
+  uint64 window_id = 1;
+  Point point = 2;
+}
+
+message DragLeave {
+  uint64 window_id = 1;
+}
+
+message Drop {
+  uint64 window_id = 1;
+  Point point = 2;
+  repeated DataFormat formats = 3;
+}
+
+message DragStart {
+  repeated DataFormat formats = 1;
+  uint64 preview_icon_id = 2;
+}

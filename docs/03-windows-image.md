@@ -87,9 +87,17 @@ Built and tested on the Mac without Windows media (`seemlessctl image …`,
 - Account password generated on the host, stored in the Keychain (service
   `app.seemless.windows-account`, account = VM name), deleted with the VM.
 
-Written but **untested** until S4: `apply.cmd`, `firstboot.cmd`, both answer
-files. Runbook: `docs/testing/first-iso.md`. Recipes are empty on purpose
-until the first real inventory exists (WP2.3).
+S4 on real media (build 26300 ARM64, 2026-11-23, `docs/spikes/S4-unattended-install.md`):
+the `windowsPE` `RunSynchronous` hook works (no `winpeshl.ini` fallback);
+`apply.cmd` through `firstboot.cmd` runs unattended in about 5 minutes.
+WinPE has no `findstr`, so scripts parse text with `for /f` only.
+SetupComplete runs **before** OOBE: the build VM powers off before OOBE, and
+OOBE (licence page, then the unattended account) runs on the user's first
+start; the answer file is deleted at first logon, not in `firstboot.cmd`.
+Not yet observed: OOBE after the licence page. Recipes `seemless-default`
+and `seemless-gaming` exist (WP2.3), written from the build-26300 inventory;
+both delete the Edge browser (WebView2 and EdgeUpdate stay); users install
+a browser with "Open in Seemless" (docs/07).
 
 ## Pipeline stages
 
@@ -145,30 +153,19 @@ show progress and fail fast.
 
 ## Recipe format
 
-`image/recipes/*.json` is ours (do not reuse Tiny11 Builder's schema; do keep
-a mapping comment to its option ids for traceability).
+A recipe is a directory `image/recipes/<name>/` of plain lists that
+`apply.cmd` reads directly in WinPE (no JSON parser there): `remove-appx.txt`
+(name prefixes), `remove-capabilities.txt`, `disable-features.txt`,
+`delete-paths.txt`, `registry/*.reg` against the offline hives. Format,
+rules and the current recipes: `image/recipes/README.md`. (An earlier draft
+of this doc proposed JSON; the directory format replaced it in M2 because
+WinPE has only cmd.)
 
-```json
-{
-  "schema": 1,
-  "name": "seemless-gaming",
-  "based_on": "Tiny11 Builder 0.2.0 'Tiny11' preset (behavioural reference)",
-  "compact_os": true,
-  "remove_appx_prefixes": ["Clipchamp.Clipchamp", "Microsoft.BingNews", "..."],
-  "remove_capabilities": ["..."],
-  "disable_features": ["..."],
-  "delete_paths": ["Program Files (x86)\\Microsoft\\Edge", "..."],
-  "registry": [{"hive": "SOFTWARE", "key": "...", "name": "...", "type": "REG_DWORD", "data": 1}],
-  "remove_tasks": ["..."],
-  "keep": ["Microsoft.VCLibs", "Microsoft.UI.Xaml", "Microsoft.DesktopAppInstaller", "..."]
-}
-```
-
-The exact lists must be produced in M2 by enumerating a real 24H2/25H2 ARM64
-image (`dism /Get-ProvisionedAppxPackages`, `/Get-Capabilities`,
-`/Get-Features`) and comparing against Tiny11 Builder's removal plan export.
-Do not hand-write lists from memory. The recipe resolver must skip entries
-that are absent from a given build and report them, never fail on them.
+Lists come from enumerating a real ARM64 image (`dism
+/Get-ProvisionedAppxPackages`, `/Get-Capabilities`, `/Get-Features`, saved
+under `image/recipes/inventory/<build>/`) and are checked against it by
+`RecipeTests`. Do not hand-write lists from memory. Entries absent from a
+given build are skipped and logged, never fatal.
 
 ### Removal groups (default recipe)
 
@@ -201,6 +198,23 @@ Applied by registry/policy in the image, not by killing Explorer:
 - Auto-logon to a single local administrator account (password generated on
   the host, stored in the Mac Keychain; needed for agent-initiated elevation
   flows and RDP-less session management).
+  - **Who creates it:** `firstboot.cmd` runs `image/guest/setup-account.ps1`
+    as SYSTEM, before OOBE. It reads the name and password from the answer
+    file's AutoLogon section and adds the account to Administrators and
+    Users by SID. OOBE does not create it: on build 26300 OOBE ignored
+    `<LocalAccounts>`/`<Group>Administrators</Group>`, leaving an account
+    in no group that could not elevate (found in S2).
+  - **The answer file** only hides OOBE's account pages
+    (`HideLocalAccountScreen`, `HideOnlineAccountScreens`) and sets
+    AutoLogon.
+  - **Cleanup:** a one-shot SYSTEM task deletes the cached answer file at
+    the first logon. A FirstLogonCommand runs as the user and could not
+    delete it from `Panther`.
+- **Fast Startup off** (`HiberbootEnabled = 0`, set by `firstboot.cmd` for
+  every recipe). With it on, every shutdown is a hibernate and the next start
+  a resume, which crashes with viogpu3d loaded and sent `wp31`/`admfix` into
+  Startup Repair (`docs/spikes/S6b-hibernate-resume-crash.md`). Hibernation
+  itself stays enabled for suspend-to-disk.
 - No lock screen, no screen saver, display never sleeps, no "let's finish
   setting up" nags, no first-logon animation.
 - Taskbar auto-hide, no desktop icons, solid black wallpaper, notifications

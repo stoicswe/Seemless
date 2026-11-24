@@ -1,0 +1,311 @@
+diff --git a/include/private/vkd3d_threads.h b/include/private/vkd3d_threads.h
+index 98ea074..6667b08 100644
+--- a/include/private/vkd3d_threads.h
++++ b/include/private/vkd3d_threads.h
+@@ -304,7 +304,11 @@ static inline void pthread_once(pthread_once_t *once, void (*func)(void))
+ 
+ static inline void vkd3d_set_thread_name(const char *name)
+ {
++#ifdef __APPLE__
++    pthread_setname_np(name);
++#else
+     pthread_setname_np(pthread_self(), name);
++#endif
+ }
+ 
+ typedef struct rwlock
+@@ -353,7 +357,9 @@ static inline int condvar_reltime_init(condvar_reltime_t *cond)
+     int rc;
+ 
+     pthread_condattr_init(&attr);
++#ifndef __APPLE__
+     pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
++#endif
+     rc = pthread_cond_init(&cond->cond, &attr);
+     pthread_condattr_destroy(&attr);
+ 
+@@ -375,6 +381,14 @@ static inline int condvar_reltime_wait_timeout_seconds(condvar_reltime_t *cond,
+     struct timespec ts;
+     int rc;
+ 
++#ifdef __APPLE__
++    ts.tv_sec = seconds;
++    ts.tv_nsec = 0;
++    rc = pthread_cond_timedwait_relative_np(&cond->cond, lock, &ts);
++    if (rc == ETIMEDOUT)
++        return 1;
++    return rc == 0 ? 0 : -1;
++#endif
+     clock_gettime(CLOCK_MONOTONIC, &ts);
+     ts.tv_sec += seconds;
+ 
+@@ -404,6 +418,10 @@ static inline unsigned int vkd3d_get_current_thread_id(void)
+     return GetCurrentThreadId();
+ #elif defined(__linux__)
+     return syscall(__NR_gettid);
++#elif defined(__APPLE__)
++    uint64_t tid = 0;
++    pthread_threadid_np(NULL, &tid);
++    return (unsigned int)tid;
+ #else
+     return 0;
+ #endif
+diff --git a/include/vkd3d_sonames.h b/include/vkd3d_sonames.h
+index fd32ba4..9bc76e2 100644
+--- a/include/vkd3d_sonames.h
++++ b/include/vkd3d_sonames.h
+@@ -32,7 +32,7 @@
+ #define SONAME_D3D12CORE "libvkd3d-proton-d3d12core.so"
+ #elif defined(__APPLE__)
+ #define SONAME_LIBVULKAN "libvulkan.1.dylib"
+-#define SONAME_D3D12CORE "vkd3d-proton-d3d12core.dylib"
++#define SONAME_D3D12CORE "libvkd3d-proton-d3d12core.dylib"
+ #else
+ #error "Unrecognized platform."
+ #endif
+diff --git a/libs/vkd3d-common/file_utils.c b/libs/vkd3d-common/file_utils.c
+index 2eb31fd..c03d07f 100644
+--- a/libs/vkd3d-common/file_utils.c
++++ b/libs/vkd3d-common/file_utils.c
+@@ -64,9 +64,13 @@ bool vkd3d_file_rename_no_replace(const char *from_path, const char *to_path)
+     if (!MoveFileA(from_path, to_path))
+         code = GetLastError();
+     return code == ERROR_SUCCESS;
++#else
++#ifdef __APPLE__
++    return renamex_np(from_path, to_path, RENAME_EXCL) == 0;
+ #else
+     return renameat2(AT_FDCWD, from_path, AT_FDCWD, to_path, RENAME_NOREPLACE) == 0;
+ #endif
++#endif
+ }
+ 
+ bool vkd3d_file_delete(const char *path)
+diff --git a/libs/vkd3d-common/platform.c b/libs/vkd3d-common/platform.c
+index 645b8ae..a96712a 100644
+--- a/libs/vkd3d-common/platform.c
++++ b/libs/vkd3d-common/platform.c
+@@ -39,7 +39,7 @@ static bool vkd3d_parse_linux_release(const char *release, uint32_t *major, uint
+         return false;
+ }
+ 
+-#if defined(__linux__)
++#if defined(__linux__) || defined(__APPLE__)
+ 
+ # include <dlfcn.h>
+ # include <errno.h>
+@@ -69,8 +69,8 @@ bool vkd3d_get_program_name(char program_name[VKD3D_PATH_MAX])
+ {
+     char *name, *p, *real_path = NULL;
+ 
+-#ifdef __ANDROID__
+-    name = getprogname();
++#if defined(__ANDROID__) || defined(__APPLE__)
++    name = (char *)getprogname();
+ #else
+     if ((name = strrchr(program_invocation_name, '/')))
+     {
+diff --git a/libs/vkd3d/cache.c b/libs/vkd3d/cache.c
+index 14a5755..3c6985b 100644
+--- a/libs/vkd3d/cache.c
++++ b/libs/vkd3d/cache.c
+@@ -20,6 +20,10 @@
+ #define VKD3D_DBG_CHANNEL VKD3D_DBG_CHANNEL_API
+ 
+ #include "vkd3d_private.h"
++#ifdef __APPLE__
++#define ftello64 ftello
++#define fseeko64 fseeko
++#endif
+ #include "vkd3d_shader.h"
+ 
+ struct vkd3d_cached_pipeline_key
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 14ed4f8..385b457 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -61,6 +61,10 @@ static const struct vkd3d_optional_extension_info optional_instance_extensions[]
+ {
+     /* EXT extensions */
+     VK_EXTENSION_COND(EXT_DEBUG_UTILS, EXT_debug_utils, VKD3D_CONFIG_FLAG_INIT_STATIC(.DEBUG_UTILS = 1, .FAULT = 1)),
++#ifdef __APPLE__
++    /* S8 spike: MoltenVK/KosmicKrisp are portability drivers. */
++    VK_EXTENSION(KHR_PORTABILITY_ENUMERATION, KHR_portability_enumeration),
++#endif
+ };
+ 
+ static const struct vkd3d_optional_extension_info optional_device_extensions[] =
+@@ -172,6 +176,10 @@ static const struct vkd3d_optional_extension_info optional_device_extensions[] =
+     VK_EXTENSION(VALVE_BUFFER_DEVICE_ADDRESS_ALLOCATION_ALIGNMENT, VALVE_buffer_device_address_allocation_alignment),
+     /* MESA extensions */
+     VK_EXTENSION(MESA_IMAGE_ALIGNMENT_CONTROL, MESA_image_alignment_control),
++#ifdef __APPLE__
++    /* S8 spike: must be enabled when a portability driver exposes it. */
++    {"VK_KHR_portability_subset", offsetof(struct vkd3d_vulkan_info, KHR_portability_subset), VKD3D_CONFIG_FLAGS_NONE, VKD3D_CONFIG_FLAGS_NONE},
++#endif
+ };
+ 
+ static const struct vkd3d_optional_extension_info optional_extensions_user[] =
+@@ -737,6 +745,10 @@ static HRESULT vkd3d_instance_init(struct vkd3d_instance *instance,
+             create_info->optional_instance_extension_count,
+             user_extension_supported, &instance->vk_info);
+     instance_info.ppEnabledExtensionNames = extensions;
++#ifdef __APPLE__
++    if (instance->vk_info.KHR_portability_enumeration)
++        instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
++#endif
+     vkd3d_free(user_extension_supported);
+ 
+     if (VKD3D_CONFIG_FLAG_IS_SET(VULKAN_DEBUG))
+@@ -2447,6 +2459,19 @@ static bool vkd3d_supports_minimum_coopmat_caps(struct d3d12_device *device)
+     return true;
+ }
+ 
++#ifdef __APPLE__
++/* S8 spike: S8_SOFT_CAPS=1 logs missing hard requirements and continues, so the
++ * test suite can show what breaks beyond the first missing feature. */
++static bool s8_soft_caps(void)
++{
++    const char *e = getenv("S8_SOFT_CAPS");
++    return e && e[0] == '1';
++}
++#define S8_HARD_FAIL() do { if (!s8_soft_caps()) return E_INVALIDARG; ERR("S8_SOFT_CAPS: ignoring missing requirement above.\n"); } while (0)
++#else
++#define S8_HARD_FAIL() return E_INVALIDARG
++#endif
++
+ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+         const struct vkd3d_device_create_info *create_info,
+         struct vkd3d_physical_device_info *physical_device_info)
+@@ -2496,13 +2521,13 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+             !physical_device_info->vertex_divisor_features.vertexAttributeInstanceRateZeroDivisor)
+     {
+         ERR("Lacking support for VK_EXT_vertex_attribute_divisor.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     if (!physical_device_info->xfb_properties.transformFeedbackQueries)
+     {
+         ERR("Lacking support for transform feedback.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     single_storage_texel =
+@@ -2517,7 +2542,7 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+     if (!single_storage_texel || !single_uniform_texel)
+     {
+         ERR("Lacking support for single texel alignment.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     /* Disable unused Vulkan features. The following features need to remain enabled
+@@ -2633,20 +2658,20 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+     if (!physical_device_info->vulkan_1_2_features.samplerMirrorClampToEdge)
+     {
+         ERR("samplerMirrorClampToEdge is not supported by this implementation. This is required for correct operation.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     if (!physical_device_info->robustness2_features.robustBufferAccess2 ||
+             !physical_device_info->robustness2_features.robustImageAccess2)
+     {
+         ERR("Robustness2 features not supported. This is required.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     if (!physical_device_info->robustness2_features.nullDescriptor)
+     {
+         ERR("Null descriptor in VK_EXT_robustness2 is not supported by this implementation. This is required for correct operation.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     if (vulkan_info->KHR_fragment_shading_rate)
+@@ -2655,20 +2680,20 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+     if (!physical_device_info->vulkan_1_1_features.shaderDrawParameters)
+     {
+         ERR("shaderDrawParameters is not supported by this implementation. This is required for correct operation.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     if (!vulkan_info->KHR_push_descriptor)
+     {
+         ERR("Push descriptors are not supported by this implementation. This is required for correct operation.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     if (!physical_device_info->maintenance_5_features.maintenance5 ||
+             !physical_device_info->maintenance_6_features.maintenance6)
+     {
+         ERR("maintenance5 and/or maintenance6 not supported by this implementation. This is required for correct operation.\n");
+-        return E_INVALIDARG;
++        S8_HARD_FAIL();
+     }
+ 
+     if (physical_device_info->cooperative_matrix_features.cooperativeMatrix)
+diff --git a/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp b/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp
+index 2978f0b..918c5ea 100644
+--- a/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp
++++ b/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp
+@@ -43,7 +43,9 @@ struct memory_region_t {
+ 
+ layout(buffer_reference, scalar)
+ buffer memory_regions_t {
+-  uvec3 region_count;
++  uint  region_count_x; /* S8: SPIRV-Cross cannot take atomics on a vector element */
++  uint  region_count_y;
++  uint  region_count_z;
+   uint  reserved;
+   memory_region_t memory_regions[];
+ };
+@@ -102,7 +104,7 @@ void main() {
+ 
+   // Allocate an output region structure from the scratch buffer
+   memory_regions_t region_buffer = memory_regions_t(scratch_buffer);
+-  uint out_index = atomicAdd(region_buffer.region_count.x, 1);
++  uint out_index = atomicAdd(region_buffer.region_count_x, 1);
+ 
+   // Compute absolute VAs for vkCmdDecompressMemoryIndirectCountNV
+   region_buffer.memory_regions[out_index] = memory_region_t(
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 8024485..2764887 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -124,6 +124,8 @@ struct vkd3d_vulkan_info
+ {
+     /* EXT instance extensions */
+     bool EXT_debug_utils;
++    bool KHR_portability_enumeration;
++    bool KHR_portability_subset;
+ 
+     /* KHR device extensions */
+     bool KHR_push_descriptor;
+diff --git a/meson.build b/meson.build
+index 6fa1a1f..e980b21 100644
+--- a/meson.build
++++ b/meson.build
+@@ -89,7 +89,7 @@ glsl_generator = generator(glsl_compiler,
+ 
+ threads_dep = dependency('threads')
+ 
+-if vkd3d_platform == 'linux' or vkd3d_platform == 'android'
++if vkd3d_platform == 'linux' or vkd3d_platform == 'android' or vkd3d_platform == 'darwin'
+   lib_dl           = vkd3d_compiler.find_library('dl')
+   vkd3d_extra_libs = [ lib_dl, threads_dep ]
+ elif vkd3d_platform == 'windows'
+@@ -132,7 +132,7 @@ if cpu_family == 'x86'
+ 
+   # Need to link against libatomic for 64-bit atomic emulation on x86
+   # when using clang.
+-  if vkd3d_platform == 'linux' or vkd3d_platform == 'android'
++  if vkd3d_platform == 'linux' or vkd3d_platform == 'android' or vkd3d_platform == 'darwin'
+     if vkd3d_is_clang
+       lib_atomic = vkd3d_compiler.find_library('atomic')
+       vkd3d_extra_libs += lib_atomic

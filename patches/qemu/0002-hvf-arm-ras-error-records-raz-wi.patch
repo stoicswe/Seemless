@@ -1,0 +1,78 @@
+From: Seemless contributors
+Subject: [PATCH] target/arm/hvf: RAZ/WI for the RAS error record registers
+
+Why: Windows 11 on Arm reads ERRIDR_EL1 (MRS x8, S3_0_C5_C3_0) when it
+resumes from hibernate, including every Fast Startup "shutdown". Under HVF
+that access traps to QEMU, hvf_sysreg_read() has no case for it and injects
+UNDEF, and Windows bugchecks 0x1E (KMODE_EXCEPTION_NOT_HANDLED,
+C000001D STATUS_ILLEGAL_INSTRUCTION, param 4 = 0xD5385308). The failed
+resume then leaves the VM in Windows Startup Repair.
+See docs/spikes/S6b-hibernate-resume-crash.md.
+
+What: ERRIDR_EL1, ERRSELR_EL1 and the ERX* registers (op0=3 op1=0 CRn=5
+CRm=3..5) read as zero and ignore writes, as KVM does. ERRIDR_EL1 == 0
+means "no error records", the same value TCG's minimal_ras_reginfo gives.
+
+Upstream: applies to utmapp/qemu and upstream QEMU's target/arm/hvf/hvf.c;
+candidate to send upstream.
+---
+diff --git a/target/arm/hvf/hvf.c b/target/arm/hvf/hvf.c
+index 288f42a..b8eaf5c 100644
+--- a/target/arm/hvf/hvf.c
++++ b/target/arm/hvf/hvf.c
+@@ -230,6 +230,32 @@ static bool sysreg_is_pmev(uint32_t reg)
+     return n <= 30;
+ }
+ 
++/*
++ * RAS error record registers (FEAT_RAS): ERRIDR_EL1, ERRSELR_EL1 and the
++ * ERX* window, op0=3 op1=0 CRn=5 CRm=3..5. Hypervisor.framework traps them to
++ * us and QEMU had no handler, so the guest got UNDEF. Windows 11 on Arm reads
++ * ERRIDR_EL1 when it resumes from hibernate (and so from Fast Startup) and
++ * bugchecks (0x1E, STATUS_ILLEGAL_INSTRUCTION). Treat them as RAZ/WI like
++ * KVM does: ERRIDR_EL1 == 0 means "no error records", the architectural
++ * minimum that TCG's minimal_ras_reginfo also implements.
++ */
++static bool sysreg_is_ras_err(uint32_t reg)
++{
++    if (SYSREG_OP0(reg) != 3 || SYSREG_OP1(reg) != 0 || SYSREG_CRN(reg) != 5) {
++        return false;
++    }
++    switch (SYSREG_CRM(reg)) {
++    case 3: /* ERRIDR_EL1, ERRSELR_EL1 */
++        return SYSREG_OP2(reg) <= 1;
++    case 4: /* ERXFR, ERXCTLR, ERXSTATUS, ERXADDR, ERXPFGF, ERXPFGCTL, ERXPFGCDN */
++        return SYSREG_OP2(reg) <= 6;
++    case 5: /* ERXMISC0..3 */
++        return SYSREG_OP2(reg) <= 3;
++    default:
++        return false;
++    }
++}
++
+ /*
+  * The PMUv3 registers this file routes to the QEMU PMU model's cpreg
+  * handlers (helper.c define_pmu_regs() and friends).
+@@ -1609,6 +1635,11 @@ static int hvf_sysreg_read(CPUState *cpu, uint32_t reg, uint64_t syndrome,
+         return hvf_sysreg_access_pmu(cpu, reg, val, true, syndrome);
+     }
+ 
++    if (sysreg_is_ras_err(reg)) {
++        *val = 0;
++        return 0;
++    }
++
+     switch (reg) {
+     case SYSREG_CNTPCT_EL0:
+         *val = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) /
+@@ -1787,6 +1818,10 @@ static int hvf_sysreg_write(CPUState *cpu, uint32_t reg, uint64_t syndrome,
+         return hvf_sysreg_access_pmu(cpu, reg, &val, false, syndrome);
+     }
+ 
++    if (sysreg_is_ras_err(reg)) {
++        return 0;
++    }
++
+     switch (reg) {
+     case SYSREG_OSLAR_EL1:
+         env->cp15.oslsr_el1 = val & 1;

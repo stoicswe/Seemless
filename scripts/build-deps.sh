@@ -98,6 +98,25 @@ fetch() {
 done_already() { [[ $FORCE == 0 && -f "$STAMPS/$1" ]] && log "$1: done (stamp), skipping" ; }
 stamp() { git -C "$SRC/$2" rev-parse HEAD >"$STAMPS/$1"; log "$1: done"; }
 
+# apply_patches <name>: apply every patches/<name>/*.patch to $SRC/<name>,
+# idempotently. Skips a patch already applied (so a re-run or a skipped fetch is
+# safe); fails loudly if a patch no longer matches the pinned source. Patches
+# are small, upstream-ready fixes kept with the source (CLAUDE.md).
+apply_patches() {
+  local name="$1"; local dir="$SRC/$name"; local pdir="$ROOT/patches/$name" p
+  [[ -d "$pdir" ]] || return 0
+  for p in "$pdir"/*.patch; do
+    [[ -e "$p" ]] || continue
+    if git -C "$dir" apply --reverse --check "$p" >/dev/null 2>&1; then
+      log "patch ${name}/$(basename "$p"): already applied"
+    elif git -C "$dir" apply --check "$p" >/dev/null 2>&1; then
+      run "patch-${name}-$(basename "$p" .patch)" git -C "$dir" apply "$p"
+    else
+      die "patch ${name}/$(basename "$p") does not apply to pinned $name"
+    fi
+  done
+}
+
 # ------------------------------------------------------------------ components
 
 build_angle() {
@@ -145,6 +164,7 @@ build_dxmt() {
 build_virgl() {
   done_already virgl && return
   fetch virglrenderer
+  apply_patches virglrenderer
   local s="$SRC/virglrenderer"
   # Native arm64 only. DEVIATION: UTM also builds an x86_64 render server and
   # fuses both with lipo; that slice exists only for the optional D3DMetal
@@ -182,6 +202,7 @@ build_swtpm() {
 build_qemu() {
   done_already qemu && return
   fetch qemu
+  apply_patches qemu   # 0001: ui/seemless display backend (docs/04, D4); 0002: hvf RAS regs (hibernate resume)
   local s="$SRC/qemu"
   mkdir -p "$s/build"
   ( cd "$s/build"

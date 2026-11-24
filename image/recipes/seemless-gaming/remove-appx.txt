@@ -1,0 +1,29 @@
+# Provisioned apps removed by seemless-gaming: seemless-default minus the Xbox apps (docs/03 "Removal groups").
+# Prefixes are checked against image/recipes/inventory/<build>/appx.txt by
+# RecipeTests; every line must match a package in the latest inventory.
+# Kept on purpose (docs/03 "keeps"): Store, StorePurchaseApp, DesktopAppInstaller
+# (winget), SecHealthUI (Defender UI), ApplicationCompatibilityEnhancements
+# (x64 emulation), all codec extensions, Calculator, Notepad, Paint, Photos,
+# Terminal, Snipping Tool, Camera, Sound Recorder, Alarms.
+#
+# Consumer and promotional apps
+Clipchamp.Clipchamp
+Microsoft.BingNews
+Microsoft.BingSearch
+Microsoft.BingWeather
+Microsoft.GetHelp
+Microsoft.MicrosoftOfficeHub
+Microsoft.MicrosoftSolitaireCollection
+Microsoft.MicrosoftStickyNotes
+Microsoft.OutlookForWindows
+Microsoft.Todos
+Microsoft.Windows.DevHome
+Microsoft.WindowsFeedbackHub
+Microsoft.ZuneMusic
+MicrosoftCorporationII.QuickAssist
+MSTeams
+# Phone Link
+Microsoft.YourPhone
+MicrosoftWindows.CrossDevice
+# Widgets board
+MicrosoftWindows.Client.WebExperience

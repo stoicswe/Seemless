@@ -36,8 +36,28 @@ func settings(_ mutate: (inout SetupPayload.Settings) -> Void = { _ in }) -> Set
         func value(_ xpath: String) throws -> String? { try unattend.nodes(forXPath: xpath).first?.stringValue }
         #expect(try value("//*[local-name()='ComputerName']") == "SEEMLESS")
         #expect(try value("//*[local-name()='TimeZone']") == "W. Europe Standard Time")
-        #expect(try value("//*[local-name()='LocalAccount']/*[local-name()='Name']") == "Ana")
         #expect(try value("//*[local-name()='AutoLogon']/*[local-name()='Username']") == "Ana")
+    }
+
+    /// S4: SetupComplete/firstboot run before OOBE, so the answer file must
+    /// survive them. It is deleted at the first logon by a SYSTEM task (a
+    /// FirstLogonCommand runs as the user and cannot delete from Panther:
+    /// seen on build 26300, where the file was still there after logon).
+    @Test func answerFileDeletedAtFirstLogonNotBeforeOOBE() throws {
+        let files = try SetupPayload(assets: repoAssets, settings: settings()).render()
+        let firstboot = String(decoding: files["seemless/firstboot.cmd"]!, as: UTF8.self)
+        let commands = firstboot.split(whereSeparator: \.isNewline).filter { !$0.lowercased().hasPrefix("rem") }
+        #expect(!commands.contains { line in
+            let l = line.lowercased()
+            return l.contains("unattend") && (l.contains("del ") || l.contains("erase ") || l.contains("move "))
+        }, "firstboot.cmd must not remove an answer file (it reads the payload copy)")
+        let script = String(decoding: try #require(files["seemless/guest/setup-account.ps1"]), as: UTF8.self)
+        #expect(script.contains(#"del /f /q "%WINDIR%\Panther\unattend.xml""#))
+        #expect(script.contains("New-ScheduledTaskTrigger -AtLogOn"))
+        #expect(script.contains("-UserId 'S-1-5-18'"), "the cleanup runs as SYSTEM")
+        let unattend = try XMLDocument(data: files["seemless/unattend.xml"]!)
+        #expect(try unattend.nodes(forXPath: "//*[local-name()='FirstLogonCommands']").isEmpty,
+                "a user-context FirstLogonCommand cannot delete the answer file")
     }
 
     @Test func licencePageShownUnlessExplicitlyAccepted() throws {
@@ -185,5 +205,93 @@ func settings(_ mutate: (inout SetupPayload.Settings) -> Void = { _ in }) -> Set
         #expect(try builder.choose(from: info, index: nil).index == 2)
         #expect(throws: ImageBuilder.BuildError.self) { try builder.choose(from: info, index: 1) }
         #expect(throws: ImageBuilder.BuildError.self) { try builder.choose(from: info, index: 9) }
+    }
+}
+
+@Suite struct LocalAccountTests {
+    @Test func usernameRules() {
+        for ok in ["Seemless", "ana", "dev.user", "a_b-c", String(repeating: "x", count: 20)] {
+            #expect(SetupPayload.Settings.isValidUsername(ok), "\(ok)")
+        }
+        for bad in ["", "Administrator", "guest", "has space", "a@b", String(repeating: "x", count: 21), "WDAGUtilityAccount"] {
+            #expect(!SetupPayload.Settings.isValidUsername(bad), "\(bad)")
+        }
+    }
+
+    /// The account is local and never comes from OOBE: the answer file hides
+    /// both account pages, has no account to create and no Microsoft-account
+    /// settings; it only carries auto-logon, which setup-account.ps1 reads.
+    @Test func answerFileOnlyHidesAccountPagesAndSetsAutoLogon() throws {
+        let files = try SetupPayload(assets: repoAssets, settings: settings { $0.username = "ana" }).render()
+        let doc = try XMLDocument(data: files["seemless/unattend.xml"]!)
+        func value(_ x: String) throws -> String? { try doc.nodes(forXPath: x).first?.stringValue }
+        #expect(try doc.nodes(forXPath: "//*[local-name()='LocalAccounts' or local-name()='UserAccounts']").isEmpty,
+                "OOBE ignored <Group>Administrators</Group> on 26300; the account is made by setup-account.ps1")
+        #expect(try value("//*[local-name()='HideLocalAccountScreen']") == "true")
+        #expect(try value("//*[local-name()='HideOnlineAccountScreens']") == "true")
+        #expect(try value("//*[local-name()='AutoLogon']/*[local-name()='Enabled']") == "true")
+        #expect(try value("//*[local-name()='AutoLogon']/*[local-name()='Username']") == "ana")
+        #expect(try value("//*[local-name()='AutoLogon']//*[local-name()='Value']")
+                == SetupPayload.encodeUnattendPassword("correct-horse-battery"))
+        #expect(try doc.nodes(forXPath: "//*[local-name()='MicrosoftAccount' or local-name()='OnlineAccount']").isEmpty)
+    }
+
+    /// S6b: with Fast Startup on, a "shut down" is a hibernate and the next
+    /// start a resume, which crashed (HVF ERRIDR_EL1) and, with viogpu3d, does
+    /// not restore the display: `wp31` and `admfix` ended in Startup Repair.
+    /// Every image, whatever its recipe, turns it off before FIRSTBOOT_OK,
+    /// and keeps hibernation itself (suspend to disk, S6).
+    @Test func firstbootDisablesFastStartup() throws {
+        let files = try SetupPayload(assets: repoAssets, settings: settings()).render()
+        let firstboot = String(decoding: files["seemless/firstboot.cmd"]!, as: UTF8.self)
+        let commands = firstboot.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.lowercased().hasPrefix("rem") }
+        let set = try #require(commands.first { $0.hasPrefix("reg add") && $0.contains("HiberbootEnabled") })
+        #expect(set.contains(#""HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power""#))
+        #expect(set.contains("/t REG_DWORD /d 0 /f"))
+        #expect(!commands.contains { $0.lowercased().contains("powercfg") && $0.lowercased().contains("/h off") },
+                "hibernation stays available for suspend to disk (S6)")
+        let reg = try #require(firstboot.range(of: "HiberbootEnabled /t REG_DWORD"))
+        let ok = try #require(firstboot.range(of: "echo FIRSTBOOT_OK"))
+        #expect(reg.lowerBound < ok.lowerBound)
+        #expect(firstboot.contains("else if not defined FASTSTARTUP_OK ("), "a failure is the build result")
+        #expect(firstboot.contains("echo ERROR faststartup "))
+        // Recipe-independent: the stock (Fat) recipe has no registry files.
+        #expect(!FileManager.default.fileExists(
+            atPath: repoAssets.root.appending(path: "recipes/stock/registry").path(percentEncoded: false)))
+    }
+
+    /// The account is created as SYSTEM before OOBE and added to the groups by
+    /// SID; firstboot reports a failure instead of FIRSTBOOT_OK.
+    @Test func firstbootCreatesTheAdministratorAccount() throws {
+        let files = try SetupPayload(assets: repoAssets, settings: settings()).render()
+        let script = String(decoding: try #require(files["seemless/guest/setup-account.ps1"]), as: UTF8.self)
+        #expect(script.contains("u:AutoLogon"), "name and password come from the answer file's AutoLogon")
+        #expect(script.contains("'Password'.Length"), "strips the unattend encoding's suffix")
+        #expect(script.contains("'S-1-5-32-544'") && script.contains("'S-1-5-32-545'"),
+                "Administrators and Users by SID, so it works in every Windows language")
+        #expect(script.contains("is not in Administrators after adding it"), "verifies instead of trusting")
+        // New-LocalUser rejects descriptions over 48 characters (seen on 26300).
+        let description = try #require(script.firstMatch(of: /-Description '([^']*)'/)?.1)
+        #expect(description.count <= 48)
+
+        let firstboot = String(decoding: files["seemless/firstboot.cmd"]!, as: UTF8.self)
+        let account = try #require(firstboot.range(of: #"Seemless\setup-account.ps1"#))
+        let ok = try #require(firstboot.range(of: "echo FIRSTBOOT_OK"))
+        #expect(account.lowerBound < ok.lowerBound)
+        #expect(firstboot.contains("if not defined ACCOUNT_OK ("))
+        // Setup rewrites the passwords in Panther's cached copy (26300), so
+        // the script must read the payload disk's original.
+        #expect(firstboot.contains(#"-AnswerFile "%P%\seemless\unattend.xml""#))
+        #expect(files["seemless/unattend.xml"] != nil)
+        #expect(firstboot.contains("echo ERROR account "))
+
+        // apply.cmd puts every rendered guest script where firstboot looks.
+        let apply = String(decoding: files["seemless/apply.cmd"]!, as: UTF8.self)
+        for path in files.keys where path.hasPrefix("seemless/guest/") {
+            let name = String(path.dropFirst("seemless/guest/".count))
+            #expect(apply.contains(#"\guest\\#(name)" "%W%\ProgramData\Seemless\\#(name)""#), "\(name)")
+        }
     }
 }

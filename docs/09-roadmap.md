@@ -25,13 +25,13 @@ Goal: prove the three risky pillars on this machine before writing product code.
 |----|------|-----------|------------|
 | WP0.1 ✅ | Repo scaffolding: directory layout (01), `.gitignore`, `scripts/versions.lock`, `scripts/bootstrap.sh` (checks Xcode, Rust, cargo-xwin, meson, ninja, Rosetta), empty Swift package and Rust workspace that build, CI workflow for the pure-logic tests | 01 | `scripts/bootstrap.sh && swift build --package-path kit && cargo check --manifest-path guest/agent/Cargo.toml` succeed |
 | S1 ✅ | Build the host graphics stack and QEMU fork from pinned sources into `build/prefix` (`scripts/build-deps.sh`, `scripts/build-qemu.sh`) following UTM's Triton build notes | 02, 04, 11 | `build/prefix/bin/qemu-system-aarch64 --version` runs; `-device help` lists `virtio-ramfb-gl`; findings note records every deviation from UTM's instructions and all licences encountered |
-| S2 | Manual Windows bring-up: install Windows 11 ARM64 by hand with `-display cocoa,gl=es`, install UTM's pre-built Neptune/Triton drivers, run `dxdiag` and 3DMark Fire Strike on DXMT | 04 | Fire Strike completes; note records scores, driver signing method (answers D12), Secure Boot/test-signing requirements, instabilities seen |
-| S3 | Display export: prototype `ui/seemless` far enough to show scanout 0 in a standalone Swift/Metal test app via IOSurface, with input going back | 04 | Test app shows the Windows desktop at display refresh and can click the Start button; note records IOSurface hand-off method and measured added latency vs `cocoa` |
-| S4 | Unattended apply-time install: `autounattend.xml` + `apply.cmd` on stock 24H2/25H2 ARM64 media, no debloat yet | 03 | From a blank qcow2 to a logged-on desktop with zero keystrokes; note says whether `windowsPE` `RunSynchronous` works or the `boot.wim`/`winpeshl.ini` fallback was needed |
+| S2 ◐ | Manual Windows bring-up: install Windows 11 ARM64 by hand with `-display cocoa,gl=es`, install UTM's pre-built Neptune/Triton drivers, run `dxdiag` and 3DMark Fire Strike on DXMT | 04 | Fire Strike completes; note records scores, driver signing method (answers D12), Secure Boot/test-signing requirements, instabilities seen |
+| S3 ✅ | Display export: prototype `ui/seemless` far enough to show scanout 0 in a standalone Swift/Metal test app via IOSurface, with input going back | 04 | Test app shows the Windows desktop at display refresh and can click the Start button; note records IOSurface hand-off method and measured added latency vs `cocoa` |
+| S4 ✅ | Unattended apply-time install: `autounattend.xml` + `apply.cmd` on stock 24H2/25H2 ARM64 media, no debloat yet | 03 | From a blank qcow2 to a logged-on desktop with zero keystrokes; note says whether `windowsPE` `RunSynchronous` works or the `boot.wim`/`winpeshl.ini` fallback was needed |
 | S5 | Atlas feasibility: second scanout + a minimal Rust program in the guest that WGC-captures two overlapping windows into a fullscreen swapchain on display 2 | 05 | Screenshot of scanout 1 shows both windows complete and unoccluded with alpha; note records max scanout size, per-window copy cost, border/consent behaviour |
-| S6 | Fast resume options: test QMP `stop/cont`, `savevm/loadvm`, migrate-to-file, and guest hibernate with the 3D driver loaded | 02 | Table of what works and time-to-interactive for each; decision recorded |
+| S6 ◐ | Fast resume options: test QMP `stop/cont`, `savevm/loadvm`, migrate-to-file, and guest hibernate with the 3D driver loaded | 02 | Table of what works and time-to-interactive for each; decision recorded |
 | S7 | Shared folder options on macOS host with Windows ARM guest: virtiofs, 9p, loopback SMB | 07 | Throughput table and a recommendation |
-| S8 | D3D12-on-MoltenVK feasibility, host only (no VM needed): build vkd3d-proton natively for macOS arm64 against MoltenVK; run its test suite and a few D3D12 demos; list every Vulkan feature/extension vkd3d-proton requires that MoltenVK lacks; repeat with KosmicKrisp | 04 | Findings note with the gap list, pass/fail counts, and a go / patch-MoltenVK / no-go recommendation |
+| S8 ✅ | D3D12-on-MoltenVK feasibility, host only (no VM needed): build vkd3d-proton natively for macOS arm64 against MoltenVK; run its test suite and a few D3D12 demos; list every Vulkan feature/extension vkd3d-proton requires that MoltenVK lacks; repeat with KosmicKrisp | 04 | Findings note with the gap list, pass/fail counts, and a go / patch-MoltenVK / no-go recommendation |
 
 **Gate:** S1, S2 and S4 must pass to continue at all. If S5 fails, seamless
 ships on tier 2 (crop) first and the atlas design is revisited. If S3 fails,
@@ -45,7 +45,7 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 | WP1.2 ✅ | `QMPClient` actor: connect, capabilities, execute, events; tests against a fake QMP server | Unit tests pass |
 | WP1.3 ✅ | `VMProcess`: swtpm + QEMU child management, state machine, log capture, crash detection | `seemlessctl vm start/stop/status` works against the S2 disk |
 | WP1.4 ✅ | Disk tooling: create base/overlay, reset, snapshot list/create/restore via `qemu-img` and QMP | `seemlessctl disk ...` commands; tests on temp dirs |
-| WP1.5 ◐ | Pause/resume/suspend per S6 outcome (pause/resume done; suspend waits for S6) | `seemlessctl vm pause/resume/suspend` with timings printed |
+| WP1.5 ◐ | Pause/resume/suspend per S6 outcome (pause/resume done; S6 chose guest hibernate for suspend, which needs the M4 agent to trigger it) | `seemlessctl vm pause/resume/suspend` with timings printed |
 
 ## M2 — Image pipeline
 
@@ -53,8 +53,8 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 |----|------|------------|
 | WP2.1 ✅ | ISO inspector (UDF/WIM header parsing, validation) | `seemlessctl image inspect <iso>` prints build/arch/editions; rejects x64 ISO |
 | WP2.2 ✅ | Payload builder: render unattend templates, recipe → command lists, build `seemless-setup.img` | Golden-file tests of rendered output |
-| WP2.3 | Recipe authoring: enumerate packages/capabilities/features on real media, write `seemless-default.json` and `seemless-gaming.json` with rationale comments in `image/recipes/README.md` | Lists come from real DISM output checked into `image/recipes/inventory/` |
-| WP2.4 ◐ | `apply.cmd` full version (written, untested until S4) with debloat, driver injection, progress protocol; host-side progress parser | `seemlessctl image build --iso ... --recipe seemless-gaming` produces a booting image unattended |
+| WP2.3 ✅ | Recipe authoring: enumerate packages/capabilities/features on real media, write `seemless-default.json` and `seemless-gaming.json` with rationale comments in `image/recipes/README.md` | Lists come from real DISM output checked into `image/recipes/inventory/` |
+| WP2.4 ◐ | `apply.cmd` full version (runs on real media through first boot with the default recipe, S4/WP2.3) with debloat, driver injection, progress protocol; host-side progress parser | `seemlessctl image build --iso ... --recipe seemless-gaming` produces a booting image unattended |
 | WP2.5 ◐ | First-boot script (minimal version: report + shutdown; runtimes, shell config, seal still to do), runtimes install, shell configuration (03), seal + manifest | Image boots to an auto-logged-on, quiet desktop; disk usage and idle RAM reported and compared with G4 |
 | WP2.6 | Path B: accept a user-built Tiny11 ISO | Same command works with a Tiny11 Builder output ISO |
 
@@ -63,7 +63,7 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 | ID | Work | Acceptance |
 |----|------|------------|
 | WP3.0 ◐ | VM manager app (owner request 2026-11-23): SwiftUI, Liquid Glass, macOS 26+. Library sidebar, new VM from ISO (automatic or manual install), settings incl. boot order/TPM/firmware wait, media attach, start/pause/restart/shut down/force off, firmware setup, snapshots, UEFI/TPM reset. Display is QEMU's own window until WP3.2. SwiftPM-built bundle (`scripts/build-app.sh`) until WP3.3 needs an Xcode project | Every action also works from `seemlessctl`; `VMManager` tests pass; screenshots of stopped and running states checked. Not yet clicked through by a person |
-| WP3.1 | Productionise `ui/seemless` patch (protocol in 04), cursor events, resize | Patch applies to pinned QEMU; protocol documented in the patch header |
+| WP3.1 ✅ | Productionise `ui/seemless` patch (protocol in 04), cursor events, resize | Patch applies to pinned QEMU; protocol documented in the patch header |
 | WP3.2 | `DisplayRenderer` + `DesktopWindow` in a minimal app target; keyboard and absolute pointer | Desktop mode usable: type in Notepad, resize window changes guest resolution |
 | WP3.3 | XPC `SeemlessVMHelper`, entitlements, signing for local runs | App launches the VM through the helper |
 | WP3.4 ◐ | Onboarding UI wired to M2 (the New VM sheet already drives `ImageBuilder`; a first-run flow is still to do) | Fresh user account → working desktop mode without Terminal |
@@ -73,14 +73,17 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 
 | ID | Work | Acceptance |
 |----|------|------------|
-| WP4.1 | `proto/seemless.proto`, Swift and Rust codegen, framing, handshake; mock agent | Mock agent ↔ `AgentClient` round-trip tests on macOS |
+| WP4.1 ✅ | `proto/seemless.proto`, Swift and Rust codegen, framing, handshake; mock agent | Mock agent ↔ `AgentClient` round-trip tests on macOS |
 | WP4.2 | Rust service + session agent skeleton, vioserial transport, named pipe, supervision | `seemlessctl agent info` returns `GuestInfo` from a real VM |
 | WP4.3 | Guest tools ISO build + install/update flow | Version bump updates agent in place; survives logoff |
 | WP4.4 | System messages: host info (resolution/DPI/work area/theme), time sync, shutdown, session state | Changing Mac appearance flips Windows theme; graceful shutdown works |
 | WP4.5 | Clipboard text/RTF/HTML/image both ways with lazy fetch and privacy rules | Manual matrix in `docs/testing/clipboard.md` passes |
 | WP4.6 | Windows driver build VM scripts (replaces dependence on UTM's prebuilt drivers) | Drivers built from pinned sources install and pass S2's check |
 
-## M5 — Seamless mode
+## M5 — Zen mode (seamless)
+
+Design and build order: docs/05 ("The Zen window", "Readiness and build
+order").
 
 | ID | Work | Acceptance |
 |----|------|------------|
@@ -106,7 +109,9 @@ default-browser bridge · WP6.8 per-app host processes for separate Dock tiles
 WP7.1 game-mode presentation + auto-enter · WP7.2 relative mouse with cursor
 state detection · WP7.3 XInput controller device + GameController bridge ·
 WP7.4 full 3D bench suite and comparison with UTM's published numbers ·
-WP7.5 D3D12 host backend: vkd3d-proton on MoltenVK wired into the Neptune
+WP7.5 D3D12 host backend (now the whole D3D12 critical path: upstream's
+guest driver already speaks D3D12, see WP7b.0): vkd3d-proton built as a
+native macOS dylib for `NPT_D3D12_LIBRARY_PATH`, on KosmicKrisp or MoltenVK, wired into the Neptune
 host with shared textures/fences (per S8), tested with a host-side D3D12
 replay harness · WP7.5b optional D3DMetal opt-in UI and Rosetta render
 server · WP7.6 vCPU QoS, idle
@@ -116,13 +121,16 @@ WP7.9 shader cache persistence, games disk.
 
 ## M7b — Guest D3D12 driver (only if the trigger in 04 fires)
 
+Trigger reviewed 2026-11-23 (WP7b.0): **not fired**. Upstream ships a D3D12
+UMD, so WP7b.1–7 stay dormant.
+
 Runs alongside M6/M7; never blocks them. Prerequisites: S8 "go", WP4.6
 (driver build VM), WP7.5 (host backend), D12 resolved. If upstream ships a
 usable D3D12 driver, replace this milestone with "integrate upstream's".
 
 | ID | Work | Acceptance |
 |----|------|------------|
-| WP7b.0 | Trigger review: state of upstream D3D12 work; contact UTM maintainers; findings note with go/no-go | Note in `docs/spikes/` and decision D3b updated |
+| WP7b.0 ✅ | Trigger review: state of upstream D3D12 work; contact UTM maintainers; findings note with go/no-go | Note in `docs/spikes/` and decision D3b updated |
 | WP7b.1 | Study: D3D12 DDI surface, what the KMD must provide for D3D12 (GPU VA, residency, scheduling), list of DDI entry points grouped by bring-up rung | Design note reviewed against Triton's structure |
 | WP7b.2 | Protocol: `d3d12.idl` through the Neptune code generator; host decoder stubs | Generated code builds on both sides; round-trip encode/decode tests pass on the Mac |
 | WP7b.3 | Rungs 1–2: device creation, clear + readback | Guest test program output matches host reference |

@@ -15,6 +15,12 @@ libepoxy          https://github.com/utmapp/libepoxy.git                  macos-
 dxmt              https://github.com/utmapp/dxmt.git                      main            1fe2e752c98207518a99c9322482f63ebb9f0232
 moltenvk          https://github.com/KhronosGroup/MoltenVK.git            v1.4.2          db66022459ffb663aa2b50f6b018bc2e124f5edf
 vkd3d-proton      https://github.com/HansKristian-Work/vkd3d-proton.git   v3.1            4522cc1a8b1347f1ab1b0f7b14a23ed9444d95d1
+# mesa: KosmicKrisp (Vulkan on Metal) for S8's comparison; alternative Vulkan driver only.
+mesa              https://gitlab.freedesktop.org/mesa/mesa.git            mesa-26.3.1     fec8830e9c94b1d67f3d8469467d5529fb2978cd
+# virglrenderer carries patches/virglrenderer/*.patch (applied by build-deps.sh):
+#   0001 — resolve eglDestroyImageKHR once at init via eglGetProcAddress, so a
+#   destroy at device reset never hits libepoxy's lazy resolver (S2; fixes a
+#   QEMU abort on cold boot / reboot).
 virglrenderer     https://github.com/utmapp/virglrenderer.git             macos-next      dd0652b13e589c4c124ea79123a3adcd85173f4f
 qemu              https://github.com/utmapp/qemu.git                      utm-edition     8ab298bc52158e52bbaf91b7f91b75d46d7384c9
 
@@ -30,3 +36,16 @@ win-kmd           https://github.com/osy/kvm-guest-drivers-windows.git    neptun
 win-umd-mesa      https://github.com/osy/virtio-win-mesa.git              neptune         68b837cda82b83e4778f60dc40b471b0545ea9c3
 win-build-mesa    https://github.com/osy/build-mesa.git                   main            51c5c4e040a1148e751ef62310533a1d9a79a315
 neptune-protocol  https://github.com/osy/neptune-protocol.git             main            b0152e59f068f04138520fe471a96263c8888860
+
+# --- D3D12 host backend (WP7.5; candidate, not built) ---
+# Upstream's Neptune fork of vkd3d-proton (native dmabuf interop). WP7b.0.
+vkd3d-proton-npt  https://github.com/osy/vkd3d-proton.git             neptune         a8b7cd423d85ff2759a395fd12aae9f0bf123dcc
+
+# --- Package-manager dependencies (WP4.1) ---
+# Fetched by SwiftPM and Cargo, not by build-deps.sh. Their lockfiles are
+# authoritative (kit/Package.resolved, guest/agent/Cargo.lock with checksums);
+# these lines record the same pins in one place. Rust crates are crates.io
+# releases, pinned with `=` in Cargo.toml.
+swift-argument-parser https://github.com/apple/swift-argument-parser.git 1.8.2  6a52f3251125d74daf04fcbd5e6f08a75d074382
+swift-protobuf    https://github.com/apple/swift-protobuf.git             1.41.0          fed2f76413026cb0ae90999a8c9116949dfe6aa6
+# crates.io: prost 0.14.6, prost-types 0.14.6, prost-build 0.14.6, protox 0.10.0

@@ -10,6 +10,13 @@ public struct ImageAssets: Sendable, Equatable {
     public var autounattend: URL { root.appending(path: "unattend/autounattend.xml") }
     public var unattend: URL { root.appending(path: "unattend/unattend.xml") }
     public var winpe: URL { root.appending(path: "winpe", directoryHint: .isDirectory) }
+    /// Windows-side scripts for "Open in Seemless" (`GuestLaunch`).
+    public var guest: URL { root.appending(path: "guest", directoryHint: .isDirectory) }
+    public static let launcherScripts = ["SeemlessLauncher.ps1", "register-launcher.ps1"]
+    public static let enableLauncherScript = "Enable automatic installs.cmd"
+    /// Run by firstboot.cmd as SYSTEM: creates the local administrator
+    /// account (OOBE's own account creation ignored the group on 26300).
+    public static let accountScript = "setup-account.ps1"
     public func recipe(_ name: String) -> URL { root.appending(path: "recipes/\(name)", directoryHint: .isDirectory) }
 
     /// `$SEEMLESS_IMAGE_ASSETS`, else `image/` in the repository containing
@@ -70,6 +77,13 @@ public struct SetupPayload: Sendable {
         public var testSigning: Bool
         public var recipeName: String
 
+        /// A local Windows account name the answer file can create: 1-20
+        /// letters, digits, . _ -, not a built-in account.
+        public static func isValidUsername(_ name: String) -> Bool {
+            name.wholeMatch(of: /[A-Za-z0-9._-]{1,20}/) != nil
+                && !["administrator", "guest", "defaultaccount", "wdagutilityaccount"].contains(name.lowercased())
+        }
+
         public init(imageIndex: Int, computerName: String = "SEEMLESS", username: String = "Seemless",
                     password: String, timeZone: String = "UTC", language: String = "en-US",
                     inputLocale: String? = nil, userLocale: String? = nil,
@@ -98,7 +112,7 @@ public struct SetupPayload: Sendable {
             if computerName.wholeMatch(of: /[A-Za-z0-9-]{1,15}/) == nil || computerName.allSatisfy(\.isNumber) {
                 e.append("computerName must be 1-15 letters, digits or hyphens")
             }
-            if username.wholeMatch(of: /[A-Za-z0-9._-]{1,20}/) == nil || ["administrator", "guest"].contains(username.lowercased()) {
+            if !Self.isValidUsername(username) {
                 e.append("username must be 1-20 letters, digits, . _ - and not a built-in account")
             }
             if password.count < 12 || password.contains(where: { $0.isNewline }) { e.append("password must be at least 12 characters, no newlines") }
@@ -166,6 +180,11 @@ public struct SetupPayload: Sendable {
         files["seemless/SEEMLESS.MARK"] = Data("Seemless setup payload\r\n".utf8)
         for script in ["apply.cmd", "SetupComplete.cmd", "firstboot.cmd"] {
             files["seemless/\(script)"] = crlf(try read(assets.winpe.appending(path: script)))
+        }
+        // Windows-side launcher for "Open in Seemless" (GuestLaunch), copied
+        // to C:\ProgramData\Seemless by apply.cmd, registered by firstboot.cmd.
+        for script in ImageAssets.launcherScripts + [ImageAssets.accountScript] {
+            files["seemless/guest/\(script)"] = crlf(try read(assets.guest.appending(path: script)))
         }
         files["seemless/config.cmd"] = crlf(Data("""
             @echo off
@@ -277,12 +296,46 @@ public struct SetupPayload: Sendable {
     }
 }
 
-/// Raw FAT32 disk images via hdiutil/diskutil.
+/// One-at-a-time gate for async work (FIFO). The actor only hands out
+/// turns; the work itself runs in the caller's context.
+actor AsyncGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if busy {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            busy = true
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+}
+
+/// Raw FAT32 disk images via hdiutil/diskutil. Operations are serialised:
+/// concurrent hdiutil/diskutil calls contend in DiskArbitration and become
+/// many times slower (seen with launch drives and payload builds together).
 enum FATImage {
+    static let gate = AsyncGate()
+
     static let hdiutil = URL(filePath: "/usr/bin/hdiutil")
     static let diskutil = URL(filePath: "/usr/sbin/diskutil")
 
     static func create(at image: URL, sizeMiB: Int, label: String) async throws {
+        await gate.acquire()
+        do {
+            try await createUngated(at: image, sizeMiB: sizeMiB, label: label)
+            await gate.release()
+        } catch {
+            await gate.release()
+            throw error
+        }
+    }
+
+    private static func createUngated(at image: URL, sizeMiB: Int, label: String) async throws {
         guard FileManager.default.createFile(atPath: image.path(percentEncoded: false), contents: nil) else {
             throw DiskTool.DiskError.cannotCreate(image.path(percentEncoded: false))
         }
@@ -301,6 +354,18 @@ enum FATImage {
 
     /// Mounts the image's first partition at a private mount point.
     static func withMounted<T: Sendable>(_ image: URL, readOnly: Bool, _ body: (URL) async throws -> T) async throws -> T {
+        await gate.acquire()
+        do {
+            let result = try await withMountedUngated(image, readOnly: readOnly, body)
+            await gate.release()
+            return result
+        } catch {
+            await gate.release()
+            throw error
+        }
+    }
+
+    private static func withMountedUngated<T: Sendable>(_ image: URL, readOnly: Bool, _ body: (URL) async throws -> T) async throws -> T {
         let device = try await attach(image, mount: false, readOnly: readOnly)
         let mount = URL(filePath: "/tmp/sl-fat-\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
         do {

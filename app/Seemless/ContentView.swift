@@ -27,6 +27,13 @@ struct ContentView: View {
         .sheet(isPresented: $model.showingNewVM) {
             NewVMView()
         }
+        .sheet(item: $model.launchRequest) { request in
+            OpenInSeemlessView(request: request)
+        }
+        .sheet(item: $model.screenshot) { result in
+            ScreenshotView(result: result)
+        }
+        .task { await model.runLaunchSwitches() }
         .alert(item: $model.error) { error in
             Alert(title: Text(error.title), message: Text(error.message))
         }
@@ -105,9 +112,12 @@ struct SidebarRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
+            // Hierarchical, not accent-coloured: an accent icon vanishes on
+            // the accent-coloured selection highlight. The dot shows state.
             Image(systemName: "macwindow")
                 .font(.title3)
-                .foregroundStyle(item.status.state == .running ? Color.accentColor : .secondary)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(item.status.isActive ? .primary : .secondary)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.config.name).lineLimit(1)

@@ -1,0 +1,5 @@
+{
+  "build": "seemless-mock-agent notepad-live",
+  "capabilities": ["core.v1", "windows.v1"],
+  "guestHelper": {"port": 47800}
+}

@@ -1,0 +1,14 @@
+# Paths deleted from the applied image (relative to the Windows partition).
+# Missing paths are logged as "skip missing", so check apply.log after a
+# build to see which exist on a given build.
+#
+# The OneDrive installer that runs at each new user's first logon.
+Windows\System32\OneDriveSetup.exe
+#
+# Microsoft Edge (browser only; owner decision 2026-11-23). Install a browser
+# afterwards with "Open in Seemless" on its installer. Kept on purpose:
+# EdgeWebView (embedded by many apps, docs/03 keeps) and EdgeUpdate, which
+# keeps EdgeWebView patched; policies.reg stops it reinstalling the browser.
+# Build 26300 has Edge, EdgeCore, EdgeUpdate and EdgeWebView there; only
+# Edge goes. No Edge shortcuts exist yet at apply time (checked).
+Program Files (x86)\Microsoft\Edge

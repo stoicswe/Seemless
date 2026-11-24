@@ -14,6 +14,9 @@ step() { printf '\n== %s\n' "$1"; }
 step "bootstrap"
 "$ROOT/scripts/bootstrap.sh"
 
+step "generated protocol types up to date (proto/ -> kit)"
+CARGO="$CARGO" "$ROOT/scripts/gen-proto.sh" --check
+
 step "swift build + test (kit)"
 swift build --package-path "$ROOT/kit"
 swift test --package-path "$ROOT/kit"

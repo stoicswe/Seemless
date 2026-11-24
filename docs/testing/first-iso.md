@@ -37,8 +37,9 @@ What happens, and what to watch in the QEMU window:
 | Firmware → "Press any key to boot from CD" | Skipped automatically: the builder presses Space for 40 s | If the window shows the UEFI shell or a boot-failure screen, the key timing missed: note it; press a key yourself |
 | WinPE starts, briefly shows Setup | Our `apply.cmd` takes over within a minute (a console window may flash). Setup's language/edition pages must **not** appear | If Setup's own pages appear, the `windowsPE` `RunSynchronous` hook did not fire on this media (the S4 question). Close the VM; see "S4 fallback" below |
 | DISM apply (5–15 min) | No visible progress in the window; host disk activity | `apply.log` afterwards shows the stage that failed |
-| Reboot into Windows, specialize, OOBE | Windows sets up; **Microsoft's licence page appears**. Accepting it is your decision; nothing accepts it for you unless you passed `--accept-windows-license` | Other OOBE pages appearing means an `unattend.xml` setting was ignored: note which |
-| First boot finishes | VM powers off by itself (`firstboot.cmd`) | Times out after 120 min (`--timeout`) |
+| Reboot into Windows, specialize | Windows sets up devices (about 2 min) | |
+| First boot finishes | VM powers off by itself (`firstboot.cmd` runs from SetupComplete, **before OOBE**). Whole build ≈ 5 min on an M3 (S4) | Times out after 120 min (`--timeout`) |
+| First normal start (`vm run` or Start in the app) | OOBE: **Microsoft's licence page appears** unless you passed `--accept-windows-license`. Accepting it is your decision. Then no other OOBE pages: the `Seemless` account is created and logs on by itself | Other OOBE pages, or a login prompt, mean an `unattend.xml` setting was ignored: note which (not yet observed: S4 stopped at the licence page) |
 
 Afterwards:
 

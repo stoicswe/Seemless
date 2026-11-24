@@ -1,0 +1,23 @@
+{
+  "build": "seemless-mock-agent notepad",
+  "capabilities": ["core.v1", "system.v1", "windows.v1"],
+  "guestInfo": {
+    "osBuild": "10.0.26300.9457",
+    "agentVersion": "mock",
+    "gpuAdapter": "Virtio GPU 3D (mock)",
+    "driverVersions": [{"name": "vioserial", "version": "100.95"}]
+  },
+  "replies": {
+    "listApps": {"appList": {"apps": [{"appKey": "notepad", "name": "Notepad", "exe": "C:\\Windows\\System32\\notepad.exe", "source": "SOURCE_START_MENU"}]}}
+  },
+  "steps": [
+    {"send": {"sessionState": {"loggedOn": true, "user": "Seemless"}}},
+    {"send": {"windowSnapshot": {"windows": [
+      {"id": "1", "kind": "WINDOW_KIND_NORMAL", "rect": {"x": 120, "y": 80, "width": 960, "height": 640},
+       "title": "Untitled - Notepad", "appKey": "notepad", "pid": 4242, "state": "WINDOW_SHOW_STATE_NORMAL",
+       "flags": {"resizable": true}}
+    ]}}},
+    {"sleepMs": 500},
+    {"send": {"windowUpdated": {"window": {"id": "1", "title": "notes.txt - Notepad"}, "changed": ["WINDOW_FIELD_TITLE"]}}}
+  ]
+}

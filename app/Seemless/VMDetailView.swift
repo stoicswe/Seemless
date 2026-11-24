@@ -55,41 +55,52 @@ private struct HeaderView: View {
     var item: AppModel.Item
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            Image(systemName: "macwindow")
-                .font(.system(size: 30, weight: .light))
-                .foregroundStyle(item.status.state == .running ? Color.accentColor : .secondary)
-                .frame(width: 64, height: 64)
-                .glassEffect(.regular.tint(item.status.state.tint.opacity(0.10)), in: .circle)
-            VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
+            // Line 1: name and controls. The controls keep their natural
+            // size; the name truncates first.
+            HStack(alignment: .center, spacing: 16) {
                 Text(item.config.name)
                     .font(.largeTitle.weight(.semibold))
                     .lineLimit(1)
-                HStack(spacing: 10) {
-                    StatusBadge(state: item.status.state)
-                    if let since = item.status.startedAt, item.status.isActive {
-                        Text("since \(since.formatted(date: .omitted, time: .shortened))")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    if item.status.owner == .elsewhere {
-                        Label("started outside the app", systemImage: "terminal")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .fixedSize()
-                            .help("Started by seemlessctl or an install. Controlled over QEMU's control socket.")
-                    }
-                }
-                if let why = item.status.state.crashReason {
-                    Text(why)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.red)
-                        .lineLimit(2)
-                        .textSelection(.enabled)
-                }
+                    .truncationMode(.tail)
+                    .layoutPriority(0)
+                Spacer(minLength: 12)
+                ControlCluster(item: item)
+                    .fixedSize()
+                    .layoutPriority(1)
             }
-            Spacer(minLength: 12)
-            ControlCluster(item: item)
+            // Line 2: state and provenance, on one baseline.
+            HStack(spacing: 8) {
+                StatusBadge(state: item.status.state)
+                if let since = item.status.startedAt, item.status.isActive {
+                    Text("since \(since.formatted(date: .omitted, time: .shortened))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                if item.status.owner == .elsewhere {
+                    Label("Started from Terminal", systemImage: "terminal")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.quaternary.opacity(0.6), in: .capsule)
+                        .help("Started by seemlessctl or an install. Seemless controls it over QEMU's control socket.")
+                }
+                Spacer(minLength: 0)
+            }
+            if let why = item.status.state.crashReason {
+                Text(why)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+            }
         }
+        .padding(.bottom, 4)
     }
 }
 
@@ -119,6 +130,9 @@ private struct ControlCluster: View {
                         Button("Start from Installer Media", systemImage: "opticaldisc") { model.start(name, keys: .cdPrompt) }
                             .disabled(item.config.media.isEmpty)
                         Button("Start Paused", systemImage: "pause") { model.start(name, paused: true) }
+                        Divider()
+                        Button("Start without Window", systemImage: "camera.viewfinder") { model.start(name, exportDisplay: true) }
+                            .help("No QEMU window; screenshots also work once the 3D driver is loaded")
                     } label: {
                         Image(systemName: "chevron.down")
                     }
@@ -150,6 +164,12 @@ private struct ControlCluster: View {
                     .buttonStyle(.glass)
                     .glassEffectID("pause", in: glass)
                     .help(item.status.state == .paused ? "Resume" : "Pause")
+                    Button { model.takeScreenshot(name) } label: {
+                        Image(systemName: "camera")
+                    }
+                    .buttonStyle(.glass)
+                    .glassEffectID("screenshot", in: glass)
+                    .help("Take Screenshot")
                     Menu {
                         Button("Shut Down", systemImage: "power") { model.shutDown(name) }
                             .disabled(item.status.state == .paused)
@@ -225,14 +245,16 @@ private struct BootSection: View {
         let b = item.config.boot
         let stopped = !item.status.isActive
         GlassSection("Boot & Firmware", symbol: "memorychip") {
-            Menu {
-                Button("Reset UEFI Variables…") { confirm = .firmware }
-                Button("Clear TPM…") { confirm = .tpm }.disabled(!b.tpm)
-            } label: {
-                Image(systemName: "ellipsis")
+            if stopped {
+                Menu {
+                    Button("Reset UEFI Variables…") { confirm = .firmware }
+                    Button("Clear TPM…") { confirm = .tpm }.disabled(!b.tpm)
+                } label: {
+                    Label("More", systemImage: "ellipsis").labelStyle(.iconOnly)
+                }
+                .menuIndicator(.hidden)
+                .help("Reset UEFI variables or clear the TPM")
             }
-            .menuIndicator(.hidden)
-            .disabled(!stopped)
         } content: {
             VStack(spacing: 9) {
                 InfoRow("Boot order", Format.bootOrder(b.order))
@@ -241,16 +263,23 @@ private struct BootSection: View {
                 InfoRow("Secure Boot", "Not available")
                     .help("The firmware build has no Secure Boot yet (docs/01 D12).")
                 Spacer(minLength: 0)
-                HStack {
-                    Button("Firmware Setup", systemImage: "cpu") { model.start(item.id, keys: .firmwareSetup) }
-                        .help("Start and press Escape to open the UEFI menu")
-                    Spacer()
-                    Button("Change…", action: edit)
+                if stopped {
+                    HStack {
+                        Button("Firmware Setup", systemImage: "cpu") { model.start(item.id, keys: .firmwareSetup) }
+                            .help("Start and press Escape to open the UEFI menu")
+                        Spacer()
+                        Button("Change…", action: edit)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
+                    .padding(.top, 2)
+                } else {
+                    Text("Shut down to change boot settings.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
                 }
-                .buttonStyle(.glass)
-                .controlSize(.small)
-                .disabled(!stopped)
-                .padding(.top, 2)
             }
         }
         .confirmationDialog(confirm == .tpm ? "Clear the TPM?" : "Reset UEFI variables?",
@@ -408,7 +437,7 @@ private struct FilesSection: View {
             HStack(spacing: 10) {
                 if model.hasWindowsPassword(item.id) {
                     Button("Copy Windows Password", systemImage: "key") { model.copyWindowsPassword(item.id) }
-                        .help("Account “Seemless”. The password is stored in your Keychain.")
+                        .help("Password of the VM’s local Windows account, stored in your Keychain.")
                 }
                 Button("Logs", systemImage: "doc.text.magnifyingglass") { model.openLogs(item.id) }
                 Button("Show in Finder", systemImage: "folder") { model.revealInFinder(item.id) }
@@ -441,7 +470,7 @@ private struct BuildSection: View {
             VStack(alignment: .leading, spacing: 10) {
                 switch progress.outcome {
                 case .running:
-                    Text("Windows is installing in the QEMU window. Accept Microsoft’s licence there when it appears; the VM shuts down by itself when the install finishes.")
+                    Text("Windows is installing by itself in the QEMU window (about 5 minutes); the VM shuts down when it is done. On the first start, Windows shows Microsoft’s licence page unless you accepted it when creating the VM.")
                         .font(.callout).foregroundStyle(.secondary)
                 case .finished(let status, let dir, let timedOut):
                     Label(progress.succeeded ? "Windows is installed. Start the VM to use it."

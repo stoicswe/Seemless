@@ -92,7 +92,7 @@ public struct ImageBuilder: Sendable {
         try await SetupPayload(assets: assets, settings: settings).writeDiskImage(to: payloadImage, extraDirectories: extra)
         log("payload disk written: \(payloadImage.path(percentEncoded: false))")
         if !request.acceptWindowsLicense {
-            log("Windows will show Microsoft's licence page during first setup; accept it in the VM window to continue")
+            log("Windows will show Microsoft's licence page on the VM's first start (after this build); accept it there")
         }
 
         // Network off while installing (docs/03): no updates pulled, no

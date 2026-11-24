@@ -1,0 +1,58 @@
+# S8 spike dependency lock. Exact versions of everything this spike fetches,
+# builds against or runs on. `check-deps.sh` compares this file with the
+# machine; `build.sh` refuses to build when they differ (override: S8_UNLOCKED=1).
+# Recorded 2026-11-23 on Apple M3, macOS 27.3.
+#
+# Formats, one entry per line:
+#   source    <name> <url> <ref> <sha>      (top-level pins also in scripts/versions.lock)
+#   submodule <parent> <path> <sha>         (fixed by the parent commit; checked after fetch)
+#   brew      <formula> <version>           (`brew list --versions`)
+#   pip       <package> <version>           (installed in build/venv, shared with scripts/build-deps.sh)
+#   tool      <name> <version>              (system tools; informational, not checked)
+
+source    vkd3d-proton  https://github.com/HansKristian-Work/vkd3d-proton.git  v3.1         4522cc1a8b1347f1ab1b0f7b14a23ed9444d95d1
+source    mesa          https://gitlab.freedesktop.org/mesa/mesa.git           mesa-26.3.1  fec8830e9c94b1d67f3d8469467d5529fb2978cd
+# mesa_clc dependencies, built locally into build/s8/clc-prefix (not system-wide):
+source    spirv-llvm-translator  https://github.com/KhronosGroup/SPIRV-LLVM-Translator.git  v23.1.3      db5855d76a0ff33228bcf48032b350b25dcdbcf2
+source    spirv-headers          https://github.com/KhronosGroup/SPIRV-Headers.git          translator-tag  cb42dec3830d3ac67fa449ecdc0c0f73d5e74498
+source    llvm-libclc            https://github.com/llvm/llvm-project.git                   llvmorg-23.1.5  392dfff97d29b59d77e5cac6d4b6ef2585fe7117
+
+submodule vkd3d-proton  khronos/SPIRV-Headers                                                    f88a2d766840fc825af1fc065977953ba1fa4a91
+submodule vkd3d-proton  khronos/Vulkan-Headers                                                   ee2ec5fd83dafce291024683b50dc89219333076
+submodule vkd3d-proton  subprojects/dxil-spirv                                                   8b48f0e0392d76be4fdcea2a3ba3ea99dddaae5b
+submodule vkd3d-proton  subprojects/dxil-spirv/subprojects/dxbc-spirv                            8dae2d8573af08378c6059aca3d5987da99d20b5
+submodule vkd3d-proton  subprojects/dxil-spirv/subprojects/dxbc-spirv/submodules/spirv_headers  c8ad050fcb29e42a2f57d9f59e97488f465c436d
+submodule vkd3d-proton  subprojects/dxil-spirv/third_party/SPIRV-Cross                           be71ee8c12cd7dc5ca8fa9581f708c2e8561fe2a
+submodule vkd3d-proton  subprojects/dxil-spirv/third_party/SPIRV-Tools                           199cb207b911501ddd76dcddf100a6e21c15ef23
+submodule vkd3d-proton  subprojects/dxil-spirv/third_party/spirv-headers                         c63848ecf2200425511319fd8bf2c17b751e501e
+
+# Vulkan driver under test and its loader.
+brew      molten-vk        1.4.2
+brew      vulkan-loader    1.4.363.0
+brew      vulkan-headers   1.4.363.0
+# Build tools for vkd3d-proton (widl comes from mingw-w64; no Windows code is linked).
+brew      meson            1.12.1
+brew      ninja            1.13.2
+brew      glslang          16.6.0
+brew      mingw-w64        14.0.0_3
+brew      pkgconf          3.0.11
+# Mesa/KosmicKrisp: mesa_clc needs LLVM + clang libs, libclc and SPIR-V/LLVM translator.
+brew      llvm             23.1.5_1
+brew      bison            3.8.2
+pip       mako             1.4.3
+pip       markupsafe       3.0.4
+pip       pyyaml           6.0.3
+pip       packaging        26.4
+# libclc and spirv-llvm-translator are NOT Homebrew packages here: the owner
+# approved local source builds only (see the source lines above).
+# KosmicKrisp links these Homebrew dylibs at runtime (bottles target macOS 27,
+# so a shipped build must build them from source for the 26.0 floor, D10):
+brew      spirv-tools      1.4.363.0
+brew      zstd             1.5.7_1
+# SPIR-V headers used by Mesa's build (the translator uses the source pin above):
+brew      spirv-headers    1.4.363.0
+brew      cmake            4.4.5
+
+tool      clang            Apple clang (Xcode 27.3 beta)
+tool      flex             2.6.4 (/usr/bin/flex)
+tool      python3          3.15.2 (Homebrew)

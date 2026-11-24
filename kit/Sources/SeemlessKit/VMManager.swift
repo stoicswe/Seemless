@@ -119,11 +119,57 @@ public actor VMManager {
         let config = try store.load(name)
         let missing = config.media.filter { !$0.exists }.map(\.path)
         guard missing.isEmpty else { throw ManagerError.mediaMissing(missing) }
+        // Launch drives belong to one run of the VM.
+        try? FileManager.default.removeItem(at: launchDirectory(name))
         let runDir = layout.runDirectory(pid: getpid()).appending(path: shortID(), directoryHint: .isDirectory)
         let vm = VMProcess(config: config, stack: stack, files: store.files(for: name), options: options, runDirectory: runDir)
         // Kept even if start fails, so status reports the crash reason.
         owned[name] = vm
         try await vm.start(resume: resume)
+    }
+
+    // MARK: Open in Seemless
+
+    /// Where a VM's launch drives live (`vms/<name>/launch/`).
+    public nonisolated func launchDirectory(_ name: String) -> URL {
+        store.files(for: name).directory.appending(path: "launch", directoryHint: .isDirectory)
+    }
+
+    /// Sends a Windows installer to the running VM (`GuestLaunch`): builds a
+    /// launch drive and hot-plugs it. Earlier launch drives older than
+    /// `replaceAfter` are unplugged first.
+    @discardableResult
+    public func launch(_ name: String, installer: URL, assets: ImageAssets? = nil,
+                       replaceAfter: Duration = .seconds(120)) async throws -> GuestLaunch.Request {
+        let state = await status(of: name).state
+        guard state == .running || state == .paused else { throw GuestLaunch.LaunchError.notRunning(name) }
+        let directory = launchDirectory(name)
+        let request = try await GuestLaunch.makeDrive(for: installer, in: directory, assets: assets)
+        do {
+            try await withQMP(name) { qmp in
+                await GuestLaunch.removeStale(qmp: qmp, directory: directory, olderThan: replaceAfter)
+                try await GuestLaunch.attach(request, qmp: qmp)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: request.image)
+            throw error
+        }
+        return request
+    }
+
+    /// Runs `body` with the owner's QMP connection if this process started
+    /// the VM, else with a fresh connection to its control socket.
+    func withQMP<T: Sendable>(_ name: String, _ body: (QMPClient) async throws -> T) async throws -> T {
+        if let vm = owned[name], let qmp = await vm.qmp { return try await body(qmp) }
+        let qmp = try await remote(name).connect()
+        do {
+            let result = try await body(qmp)
+            await qmp.close()
+            return result
+        } catch {
+            await qmp.close()
+            throw error
+        }
     }
 
     public func pause(_ name: String) async throws {

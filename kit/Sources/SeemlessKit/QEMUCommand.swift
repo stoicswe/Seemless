@@ -69,6 +69,10 @@ public struct LaunchOptions: Sendable, Equatable {
         /// QEMU's own Cocoa window with GL via ANGLE/Metal. Bring-up mode
         /// until the app's display path exists (S3).
         case cocoaWindow
+        /// No window: scanouts are exported as IOSurfaces by our `ui/seemless`
+        /// backend (patches/qemu/0001, docs/04) for `DisplayClient`
+        /// (`seemlessctl screenshot`, later the app's renderer, WP3.2).
+        case exported
     }
 
     public var display: Display
@@ -109,13 +113,16 @@ public struct RunPaths: Sendable, Equatable {
     /// `seemlessctl`). QEMU serves one client per monitor, so the owner's
     /// connection would otherwise lock everyone else out.
     public var controlSocket: URL { directory.appending(path: "ctl.sock") }
+    /// Third QMP monitor, held by Zen mode for guest input (`input-send-event`)
+    /// for as long as it runs, so it never locks `VMRemote` out of `ctl.sock`.
+    public var inputSocket: URL { directory.appending(path: "input.sock") }
     public var agentSocket: URL { directory.appending(path: "agent.sock") }
     public var bulkSocket: URL { directory.appending(path: "bulk.sock") }
     public var swtpmSocket: URL { directory.appending(path: "swtpm.sock") }
     public var qemuLog: URL { directory.appending(path: "qemu.log") }
     public var swtpmLog: URL { directory.appending(path: "swtpm.log") }
 
-    public var sockets: [URL] { [qmpSocket, controlSocket, agentSocket, bulkSocket, swtpmSocket] }
+    public var sockets: [URL] { [qmpSocket, controlSocket, inputSocket, agentSocket, bulkSocket, swtpmSocket] }
 }
 
 /// Files that belong to one VM on disk (docs/02 storage layout).
@@ -179,6 +186,9 @@ public struct QEMUCommand: Sendable {
         case .cocoaWindow:
             a += ["-device", "virtio-ramfb-gl,hostmem=8G,blob=true,venus=true,neptune=true,max_outputs=2"]
             a += ["-display", "cocoa,gl=es"]
+        case .exported:
+            a += ["-device", "virtio-ramfb-gl,hostmem=8G,blob=true,venus=true,neptune=true,max_outputs=2"]
+            a += ["-display", "seemless,gl=es,service=\(DisplayExport.serviceName(for: run))"]
         case .headless:
             a += ["-device", "virtio-ramfb,max_outputs=2"]
             a += ["-display", "none"]
@@ -236,6 +246,7 @@ public struct QEMUCommand: Sendable {
         }
         a += ["-qmp", "unix:\(p(run.qmpSocket)),server=on,wait=off"]
         a += ["-qmp", "unix:\(p(run.controlSocket)),server=on,wait=off"]
+        a += ["-qmp", "unix:\(p(run.inputSocket)),server=on,wait=off"]
         if options.startPaused { a += ["-S"] }
         return a
     }

@@ -5,15 +5,28 @@
 
   - Local administrator account with a host-generated password (kept in the
     Mac's Keychain), auto-logon for seamless mode (docs/03 "Shell configuration").
+    The account is NOT created here: on build 26300 OOBE ignored
+    <LocalAccounts>/<Group>Administrators</Group> (the account ended up in no
+    group, so nothing could elevate). firstboot.cmd creates it as SYSTEM
+    before OOBE (image/guest/setup-account.ps1) from the AutoLogon values
+    below; this file hides OOBE's account pages and turns on auto-logon.
   - HideEULAPage is true only when the user explicitly accepted Microsoft's
     licence terms on the host (seemlessctl image build -accept-windows-license);
     otherwise Windows shows its licence page and the user accepts it there.
   - ProtectYourPC 3: do not opt in to Microsoft's recommended data settings.
   - Passwords use Windows' unattend encoding (base64 of UTF-16LE password +
-    "Password"). That is obfuscation, not encryption; firstboot.cmd deletes
-    this file after setup.
+    "Password"). That is obfuscation, not encryption, so a SYSTEM task
+    registered by setup-account.ps1 deletes this file at the first logon.
+    (A FirstLogonCommand cannot: it runs as the user, and Panther is
+    admin-only.)
 
-  UNTESTED until spike S4.
+  S4 (build 26300): SetupComplete.cmd runs BEFORE oobeSystem, so the build
+  VM powers off before OOBE and OOBE (with the licence page) runs on the
+  user's first start. That is why the file must survive SetupComplete and is
+  only removed at first logon, after OOBE has used it.
+
+  Microsoft-account / online screens are hidden; there are no Microsoft
+  account settings anywhere: the account is always local.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="specialize">
@@ -33,22 +46,11 @@
       <OOBE>
         <HideEULAPage>{{HIDE_EULA_PAGE}}</HideEULAPage>
         <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
         <ProtectYourPC>3</ProtectYourPC>
       </OOBE>
-      <UserAccounts>
-        <LocalAccounts>
-          <LocalAccount wcm:action="add">
-            <Name>{{USERNAME}}</Name>
-            <Group>Administrators</Group>
-            <Password>
-              <Value>{{PASSWORD_ENCODED}}</Value>
-              <PlainText>false</PlainText>
-            </Password>
-          </LocalAccount>
-        </LocalAccounts>
-      </UserAccounts>
       <AutoLogon>
         <Enabled>true</Enabled>
         <Username>{{USERNAME}}</Username>

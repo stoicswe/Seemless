@@ -15,9 +15,18 @@ let package = Package(
     dependencies: [
         // Apache-2.0. Recorded in THIRD_PARTY.md.
         .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.8.2"),
+        // Apache-2.0. Runtime for the generated agent protocol types, and the
+        // protoc-gen-swift plugin used by scripts/gen-proto.sh.
+        .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.41.0"),
     ],
     targets: [
-        .target(name: "SeemlessKit"),
+        // Mach plumbing for the display export (docs/04, WP3.1). Our own code:
+        // QEMU's side lives only in patches/qemu.
+        .target(name: "CSeemlessDisplay"),
+        .target(
+            name: "SeemlessKit",
+            dependencies: ["CSeemlessDisplay", .product(name: "SwiftProtobuf", package: "swift-protobuf")]
+        ),
         .executableTarget(
             name: "seemlessctl",
             dependencies: [
@@ -25,6 +34,9 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
-        .testTarget(name: "SeemlessKitTests", dependencies: ["SeemlessKit"]),
+        .testTarget(
+            name: "SeemlessKitTests",
+            dependencies: ["SeemlessKit", "CSeemlessDisplay", .product(name: "SwiftProtobuf", package: "swift-protobuf")]
+        ),
     ]
 )

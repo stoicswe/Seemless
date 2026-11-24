@@ -15,8 +15,11 @@ virtual machine and presents Windows applications as if they were Mac apps:
    from a real WDDM driver in the guest to a Direct3D-on-Metal implementation
    on the host. We build on UTM's open-source Neptune/Triton stack rather than
    inventing one (see [04-graphics.md](04-graphics.md)).
-4. **Seamless mode.** The Windows desktop is hidden. Each Windows top-level
-   window becomes its own `NSWindow`, with Dock icons, Mission Control, Cmd-Tab,
+4. **Zen mode** (the product name for what these docs also call "seamless
+   mode"; owner, 2026-11-24). The Windows desktop is hidden. Each Windows
+   top-level window becomes its own chrome-less `NSWindow`, with no Mac
+   title bar or traffic-light buttons: the Windows app's own frame is the
+   window, as if it ran natively, with Dock icons, Mission Control, Cmd-Tab,
    clipboard, drag and drop, file associations and notifications bridged.
 5. **A desktop mode and a game mode** for when a single surface is the right
    answer (setup, troubleshooting, exclusive-fullscreen games).
@@ -79,8 +82,8 @@ installers, real launchers.
 
 | Mode | What the user sees | When |
 |------|--------------------|------|
-| **Seamless** (default) | One `NSWindow` per Windows window; no desktop, no taskbar | Day-to-day apps, windowed games |
-| **Desktop** | One Mac window (or fullscreen Space) showing the whole Windows desktop | First boot, troubleshooting, apps that misbehave in seamless |
+| **Zen** (default; "seamless") | One chrome-less `NSWindow` per Windows window; no desktop, no taskbar, no Mac window buttons | Day-to-day apps, windowed games |
+| **Desktop** | One Mac window (or fullscreen Space) showing the whole Windows desktop | First boot, troubleshooting, apps that misbehave in Zen |
 | **Game** | Fullscreen, low-latency, relative mouse, the guest's primary display scanned out directly | Exclusive/borderless fullscreen games; entered automatically |
 
 ## Glossary

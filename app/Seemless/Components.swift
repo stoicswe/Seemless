@@ -55,7 +55,9 @@ struct StatusBadge: View {
                 .shadow(color: state.tint.opacity(0.6), radius: state == .running ? 3 : 0)
             Text(state.label)
                 .font(.callout.weight(.medium))
+                .lineLimit(1)
         }
+        .fixedSize()
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .glassEffect(.regular.tint(state.tint.opacity(0.12)), in: .capsule)

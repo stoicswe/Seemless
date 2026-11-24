@@ -65,12 +65,31 @@ and shows each Windows window as a native Mac window. The plan lives in
 - VM settings: `seemlessctl vm set` (cpus, memory, disk grow, boot order, TPM,
   firmware wait, forwards), `vm media attach|detach|list`, `vm restart`,
   `vm firmware reset-vars|reset-tpm`, `vm screendump --out x.png` (see the
-  guest screen yourself), `vm run --firmware-setup|--cd-prompt`.
+  guest screen yourself), `vm run --firmware-setup|--cd-prompt`,
+  `vm open <installer.exe|.msi>` (Open in Seemless; VM must be running).
 - App (WP3.0): `scripts/build-app.sh [--open]` → `build/app/Seemless.app`.
-  `SEEMLESS_ROOT=<dir>` for a throwaway root. Screenshot its window with
+  `SEEMLESS_ROOT=<dir>` for a throwaway root; `SEEMLESS_OPEN=new-vm`
+  (`-automatic`, `-about`) opens the New VM sheet for screenshots. Screenshot its window with
   `screencapture -x -o -l <windowid>` (window id via CGWindowListCopyWindowInfo).
 - Windows image (M2): `seemlessctl image inspect <iso>`, `image build --iso`,
   `image payload --out`, `image result`. Runbook: `docs/testing/first-iso.md`.
+- Agent protocol (M4): schema `proto/seemless.proto`; after editing it run
+  `scripts/gen-proto.sh` (Swift; `--check` in CI). Rust regenerates on build.
+  `seemlessctl mock-agent --socket /tmp/x.sock [--script proto/mock/notepad.json]`
+  serves a fake agent; `seemlessctl agent hello|info --socket <path>` (or
+  `--name <vm>`) talks to it. Socket paths must be under 104 bytes: use
+  `/tmp`, not the scratchpad.
+- Zen mode (Z1 preview, docs/05): needs a VM run with `--export-display`.
+  `SEEMLESS_OPEN=zen:<vm>` enters it at launch,
+  `SEEMLESS_ZEN_AGENT=<mock-agent socket>` drives windows from a script
+  until the Windows agent exists, and `SEEMLESS_ZEN_SCALE` sets points per
+  guest pixel. `SEEMLESS_OPEN=select:<vm>` only selects a VM (for
+  screenshots of the running layout). `SEEMLESS_ZEN_STATS=1` logs hit
+  tests, `SetWindowRect`s and frames every 10 s, and each click's guest pixel.
+  Real Windows windows before the agent exists: run
+  `proto/mock/zen-guest-helper.ps1` in the guest (needs the guest's network)
+  and `mock-agent --script proto/mock/notepad-live.json`. Test list and
+  results: `docs/testing/seamless.md`.
 - Tests: `swift test --package-path kit` (integration tests boot real QEMU to
   firmware; they skip themselves if `build/prefix` is missing).
 - Smoke-boot the stack: `scripts/smoke-qemu.sh` (headless) or `--window`

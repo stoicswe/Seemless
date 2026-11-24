@@ -1,0 +1,7 @@
+# Optional features disabled by seemless-default. Exact names from
+# inventory/<build>/features.txt (state "Enabled").
+# Kept: .NET 4 / WCF, printing (Print to PDF), Windows Search, Defender
+# definitions, MSRDC-Infrastructure (Remote Desktop / RemoteApp plumbing),
+# MediaPlayback.
+WorkFolders-Client
+SmbDirect

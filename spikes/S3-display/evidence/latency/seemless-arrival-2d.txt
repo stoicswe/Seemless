@@ -1,0 +1,17 @@
+# seemless-arrival-2d (seemless --arrival --drawables 2) Mon Nov 23 19:18:30 EST 2026
+n=40 misses=0  min 31.5  p50 56.7  mean 55.7  p90 70.1  max 94.8 ms
+raw: 36.4 58.4 31.5 53.3 49.3 64.4 61.1 56.9 61.4 64.4 94.8 60.1 33.8 39.0 51.2 70.1 55.5 73.4 55.0 35.4 63.0 58.4 74.4 41.3 49.2 56.7 54.9 37.4 59.9 65.0 45.8 55.9 45.3 64.0 71.6 61.8 53.6 62.0 57.6 46.2
+frames received 853, presented 848, replaced before display 3
+QEMU copy into IOSurface n= 848  p50   0.07  p90   0.18  p99   0.48 ms
+Mach message n= 848  p50   0.02  p90   0.05  p99   0.98 ms
+wait for display link n= 848  p50   0.03  p90   0.05  p99   0.09 ms
+draw + present n= 848  p50  20.56  p90  23.16  p99  24.37 ms
+total update→on glass n= 848  p50  20.79  p90  23.36  p99  25.31 ms
+QMP input round trip n=   1  p50   0.13  p90   0.13  p99   0.13 ms
+frames received 868, presented 864, replaced before display 3
+QEMU copy into IOSurface n= 864  p50   0.07  p90   0.18  p99   0.49 ms
+Mach message n= 864  p50   0.02  p90   0.06  p99   1.19 ms
+wait for display link n= 864  p50   0.03  p90   0.05  p99   0.10 ms
+draw + present n= 864  p50  20.52  p90  23.18  p99  24.37 ms
+total update→on glass n= 864  p50  20.77  p90  23.39  p99  25.46 ms
+QMP input round trip n=   1  p50   0.13  p90   0.13  p99   0.13 ms

@@ -1,0 +1,1096 @@
+From: Seemless contributors
+Subject: [PATCH] ui/seemless: export scanouts as IOSurfaces over Mach ports
+
+Why: the Seemless app draws the guest itself (docs/04, decision D4).
+QEMU's -display dbus cannot drive virtio-gpu-gl on macOS (no EGL init, no
+macOS texture export, D-Bus cannot carry Mach ports; spike S3), so this
+adds a small display backend instead. One new file in ui/, a QAPI
+enum/struct and one meson line; nothing in virtio-gpu or Neptune code.
+Applies to utmapp/qemu 8ab298bc52158e52bbaf91b7f91b75d46d7384c9.
+
+Usage
+  -display seemless,gl=es,service=NAME
+  gl=es is required for virtio-gpu-gl (ANGLE/Metal, as -display cocoa).
+  SEEMLESS_REFRESH_MS (environment) overrides the 30 ms refresh timer that
+  paces 2D (ramfb, firmware, Basic Display) updates.
+
+Protocol, version 1
+  Transport: Mach messages. QEMU checks in a receive port with
+  bootstrap_check_in(NAME) at start-up and exits if the name is taken.
+  Every message QEMU receives must carry a security trailer whose uid is
+  QEMU's own uid; anything else, malformed or unknown is destroyed.
+  Integers are host-endian (little), structs naturally aligned, fields
+  follow the mach_msg_header_t (24 bytes) in this order.
+
+  Client -> QEMU (to NAME)
+    0x53450001 CONNECT   complex: 1 port descriptor = send right to the
+                         client's receive port; u32 version (=1), u32 flags (0).
+                         Up to 8 clients. QEMU answers with SURFACES (each
+                         scanout that has a ring), CURSOR, MOUSE, then a fresh
+                         FRAME.
+    0x53450002 ACK       u32 head, generation, index, pad. "I am reading this
+                         slot": QEMU will not overwrite it while it has any
+                         other slot free. msgh_local_port = the client's port
+                         (MAKE_SEND), which identifies the client.
+    0x53450003 SET_SIZE  u32 head, width, height, width_mm, height_mm, pad.
+                         Forwarded as dpy_set_ui_info (virtio-gpu: display
+                         info / EDID); the guest driver decides whether to
+                         switch. Accepted range 320x200 .. 16384x16384.
+
+  QEMU -> client (to the client's port; never blocks: send timeout 0, a
+  full queue drops the message, a dead port drops the client)
+    0x53451001 SURFACES  complex: 3 port descriptors (MOVE_SEND, from
+                         IOSurfaceCreateMachPort) = the scanout's ring;
+                         u32 version, head, generation, width, height,
+                         fourcc ('BGRA' or 'RGBA', 4 bytes per pixel, alpha
+                         undefined). Sent again, with generation+1, whenever
+                         size or format changes. Clients must check each
+                         surface's size and format against the header.
+    0x53451002 FRAME     u32 head, generation, index, source (1 = CPU copy of
+                         a 2D surface, 2 = GPU blit of a virgl Metal scanout);
+                         u64 serial; u32 x, y, w, h (currently the whole
+                         scanout); u64 t_update, t_ready (mach_absolute_time
+                         when the frame reached QEMU's display code and when
+                         its pixels were in the slot). The slot stays intact
+                         until at least the next two frames, or while ACKed.
+    0x53451003 DISABLE   u32 head, pad. The GL scanout went away; 2D frames
+                         (if any) follow.
+    0x53451004 CURSOR    complex: 1 OOL descriptor = width*height u32 pixels
+                         0xAARRGGBB; u32 head, serial, width, height;
+                         i32 hot_x, hot_y. At most 256x256.
+    0x53451005 MOUSE     u32 head; i32 x, y; u32 visible. Guest pointer
+                         position (dpy_mouse_set).
+
+  Heads are QEMU's graphic consoles in index order (at most 4).
+  Input is not part of this protocol: clients use QMP input-send-event.
+
+How frames are made
+  2D surfaces: full CPU copy into the next free slot on every update
+  (slots lag, so damage alone is not enough). Metal scanouts: one GPU blit
+  at RESOURCE_FLUSH (dpy_gl_update), one in flight, because the guest's
+  buffer is only guaranteed intact from the flush to the next flip (same
+  rule as ui/cocoa.m). Nothing is copied while no client is connected.
+  GL-only scanouts (no native Metal texture) are not exported.
+
+SPDX-License-Identifier: GPL-2.0-or-later
+---
+diff --git a/qapi/ui.json b/qapi/ui.json
+index d80d6da..8c0812d 100644
+--- a/qapi/ui.json
++++ b/qapi/ui.json
+@@ -1379,6 +1379,19 @@
+                 '*p2p': 'bool',
+                 '*audiodev': 'str' } }
+ 
++##
++# @DisplaySeemless:
++#
++# Seemless display options (spike S3).
++#
++# @service: bootstrap name of the Mach receive port the app checked in.
++#
++# Since: 10.0
++##
++{ 'struct'  : 'DisplaySeemless',
++  'data'    : { '*service': 'str' },
++  'if'      : 'CONFIG_COCOA' }
++
+ ##
+ # @DisplayGLMode:
+ #
+@@ -1512,6 +1525,9 @@
+ #
+ # @dbus: Start a D-Bus service for the display.  (Since 7.0)
+ #
++# @seemless: Export scanouts to the Seemless app as IOSurfaces
++#     (spike S3).  (since 10.0)
++#
+ # Since: 2.12
+ ##
+ { 'enum'    : 'DisplayType',
+@@ -1525,7 +1541,8 @@
+     { 'name': 'curses', 'if': 'CONFIG_CURSES' },
+     { 'name': 'cocoa', 'if': 'CONFIG_COCOA' },
+     { 'name': 'spice-app', 'if': 'CONFIG_SPICE' },
+-    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' }
++    { 'name': 'dbus', 'if': 'CONFIG_DBUS_DISPLAY' },
++    { 'name': 'seemless', 'if': 'CONFIG_COCOA' }
+   ]
+ }
+ 
+@@ -1563,7 +1580,8 @@
+       'egl-headless': { 'type': 'DisplayEGLHeadless',
+                         'if': { 'all': ['CONFIG_OPENGL', 'CONFIG_EGL'] } },
+       'dbus': { 'type': 'DisplayDBus', 'if': 'CONFIG_DBUS_DISPLAY' },
+-      'sdl': { 'type': 'DisplaySDL', 'if': 'CONFIG_SDL' }
++      'sdl': { 'type': 'DisplaySDL', 'if': 'CONFIG_SDL' },
++      'seemless': { 'type': 'DisplaySeemless', 'if': 'CONFIG_COCOA' }
+   }
+ }
+ 
+diff --git a/ui/meson.build b/ui/meson.build
+index 10eea7e..5935f6a 100644
+--- a/ui/meson.build
++++ b/ui/meson.build
+@@ -30,6 +30,7 @@ if host_os == 'linux'
+   system_ss.add(files('input-linux.c', 'udmabuf.c'))
+ endif
+ system_ss.add(when: cocoa, if_true: files('cocoa.m'))
++system_ss.add(when: [cocoa, metal, iosurface], if_true: [files('seemless.m'), metal, iosurface])
+ 
+ vnc_ss = ss.source_set()
+ vnc_ss.add(files(
+diff --git a/ui/seemless.m b/ui/seemless.m
+new file mode 100644
+index 0000000..b560a0a
+--- /dev/null
++++ b/ui/seemless.m
+@@ -0,0 +1,948 @@
++/*
++ * Seemless display backend: exports scanouts to other processes as
++ * IOSurfaces, handed over as Mach send rights.  Protocol: the header of
++ * patches/qemu/0001-ui-seemless-display-backend.patch (Seemless repository),
++ * summarised here.
++ *
++ *   -display seemless,gl=es,service=NAME
++ *
++ * QEMU checks in a Mach receive port under the bootstrap name NAME.  Clients
++ * (same uid only) send CONNECT with a send right to their own receive port;
++ * QEMU replies with each scanout's surface ring and then one FRAME message
++ * per finished frame.  Clients may send ACK (slot they are reading) and
++ * SET_SIZE (preferred scanout size, forwarded as UI info / EDID).
++ * Keyboard and pointer input do not go through here: clients use QMP
++ * input-send-event.
++ *
++ * Copyright (c) 2026 Seemless contributors
++ * SPDX-License-Identifier: GPL-2.0-or-later
++ */
++
++#include "qemu/osdep.h"
++#include "qemu/error-report.h"
++#include "qemu/main-loop.h"
++#include "qemu/module.h"
++#include "qemu/thread.h"
++#include "qemu/timer.h"
++#include "system/system.h"
++#include "ui/console.h"
++#include "ui/egl-helpers.h"
++#include "ui/egl-context.h"
++#include "qapi/error.h"
++
++#include <IOSurface/IOSurface.h>
++#include <Metal/Metal.h>
++#include <mach/mach.h>
++#include <mach/mach_time.h>
++#include <servers/bootstrap.h>
++
++/* ---- protocol (version 1) -------------------------------------------- */
++
++#define SL_VERSION        1
++#define SL_RING           3
++#define SL_MAX_HEADS      4
++#define SL_MAX_CLIENTS    8
++#define SL_MAX_CURSOR     256
++#define SL_MAX_SIZE       16384
++
++/* client -> QEMU */
++#define SL_C_CONNECT      0x53450001
++#define SL_C_ACK          0x53450002
++#define SL_C_SET_SIZE     0x53450003
++/* QEMU -> client */
++#define SL_Q_SURFACES     0x53451001
++#define SL_Q_FRAME        0x53451002
++#define SL_Q_DISABLE      0x53451003
++#define SL_Q_CURSOR       0x53451004
++#define SL_Q_MOUSE        0x53451005
++
++#define SL_SOURCE_2D      1
++#define SL_SOURCE_METAL   2
++
++typedef struct {
++    mach_msg_header_t header;
++    mach_msg_body_t body;
++    mach_msg_port_descriptor_t client;
++    uint32_t version;
++    uint32_t flags;
++} SLConnectMsg;
++
++typedef struct {
++    mach_msg_header_t header;
++    uint32_t head;
++    uint32_t generation;
++    uint32_t index;
++    uint32_t pad;
++} SLAckMsg;
++
++typedef struct {
++    mach_msg_header_t header;
++    uint32_t head;
++    uint32_t width;
++    uint32_t height;
++    uint32_t width_mm;
++    uint32_t height_mm;
++    uint32_t pad;
++} SLSetSizeMsg;
++
++typedef struct {
++    mach_msg_header_t header;
++    mach_msg_body_t body;
++    mach_msg_port_descriptor_t surface[SL_RING];
++    uint32_t version;
++    uint32_t head;
++    uint32_t generation;
++    uint32_t width;
++    uint32_t height;
++    uint32_t fourcc;
++} SLSurfacesMsg;
++
++typedef struct {
++    mach_msg_header_t header;
++    uint32_t head;
++    uint32_t generation;
++    uint32_t index;
++    uint32_t source;
++    uint64_t serial;
++    uint32_t x, y, w, h;
++    uint64_t t_update;   /* mach_absolute_time: guest frame reached us */
++    uint64_t t_ready;    /* mach_absolute_time: pixels are in the slot */
++} SLFrameMsg;
++
++typedef struct {
++    mach_msg_header_t header;
++    uint32_t head;
++    uint32_t pad;
++} SLDisableMsg;
++
++typedef struct {
++    mach_msg_header_t header;
++    mach_msg_body_t body;
++    mach_msg_ool_descriptor_t pixels;   /* width*height uint32 0xAARRGGBB */
++    uint32_t head;
++    uint32_t serial;
++    uint32_t width;
++    uint32_t height;
++    int32_t hot_x;
++    int32_t hot_y;
++} SLCursorMsg;
++
++typedef struct {
++    mach_msg_header_t header;
++    uint32_t head;
++    int32_t x;
++    int32_t y;
++    uint32_t visible;
++} SLMouseMsg;
++
++typedef union {
++    mach_msg_header_t header;
++    SLConnectMsg connect;
++    SLAckMsg ack;
++    SLSetSizeMsg size;
++    uint8_t raw[512];
++} SLInMsg;
++
++/* ---- state ------------------------------------------------------------ */
++
++typedef struct SLClient {
++    mach_port_t port;                   /* send right, MACH_PORT_NULL = free */
++    uint32_t reading[SL_MAX_HEADS];     /* slot index + 1, 0 = none */
++    uint32_t reading_gen[SL_MAX_HEADS];
++} SLClient;
++
++typedef struct SLHead {
++    DisplayChangeListener dcl;
++    uint32_t id;
++    DisplaySurface *surface;
++
++    IOSurfaceRef ring[SL_RING];
++    id<MTLTexture> ring_tex[SL_RING];
++    uint32_t width, height, fourcc, generation;
++    int last_sent;
++    uint64_t serial;
++    bool need_full;
++
++    id<MTLTexture> scanout_tex;
++    MTLOrigin scanout_origin;
++    MTLSize scanout_size;
++    bool scanout_active;
++    bool read_inflight;
++    bool gl_dirty;
++
++    QEMUCursor *cursor;
++    uint32_t cursor_serial;
++    int mouse_x, mouse_y;
++    bool mouse_on;
++} SLHead;
++
++typedef struct SLFrameDone {
++    SLHead *h;
++    uint32_t generation, index;
++    uint64_t t_update, t_ready;
++} SLFrameDone;
++
++static SLHead sl_heads[SL_MAX_HEADS];
++static unsigned sl_nheads;
++static SLClient sl_clients[SL_MAX_CLIENTS];
++static mach_port_t sl_port = MACH_PORT_NULL;
++static QemuThread sl_thread;
++
++static id<MTLDevice> sl_device;
++static id<MTLCommandQueue> sl_queue;
++
++#ifdef CONFIG_EGL
++static DisplayGLCtx sl_dgc;
++#endif
++
++static bool sl_have_clients(void)
++{
++    for (int i = 0; i < SL_MAX_CLIENTS; i++) {
++        if (sl_clients[i].port != MACH_PORT_NULL) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static void sl_drop_client(SLClient *c)
++{
++    mach_port_deallocate(mach_task_self(), c->port);
++    memset(c, 0, sizeof(*c));
++}
++
++/*
++ * Send to one client.  Never blocks the main loop: a client that does not
++ * drain its queue loses messages; a dead one is dropped.
++ */
++static bool sl_send(SLClient *c, mach_msg_header_t *h, mach_msg_size_t size,
++                    bool complex)
++{
++    kern_return_t kr;
++
++    h->msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0) |
++                   (complex ? MACH_MSGH_BITS_COMPLEX : 0);
++    h->msgh_size = size;
++    h->msgh_remote_port = c->port;
++    h->msgh_local_port = MACH_PORT_NULL;
++    kr = mach_msg(h, MACH_SEND_MSG | MACH_SEND_TIMEOUT, size, 0,
++                  MACH_PORT_NULL, 0, MACH_PORT_NULL);
++    if (kr == MACH_SEND_INVALID_DEST || kr == MACH_SEND_INVALID_RIGHT) {
++        sl_drop_client(c);
++        return false;
++    }
++    return kr == KERN_SUCCESS;
++}
++
++static void sl_send_all(mach_msg_header_t *h, mach_msg_size_t size)
++{
++    for (int i = 0; i < SL_MAX_CLIENTS; i++) {
++        if (sl_clients[i].port != MACH_PORT_NULL) {
++            sl_send(&sl_clients[i], h, size, false);
++        }
++    }
++}
++
++static void sl_send_surfaces(SLHead *h, SLClient *c)
++{
++    SLSurfacesMsg m = { 0 };
++
++    if (!h->ring[0]) {
++        return;
++    }
++    m.body.msgh_descriptor_count = SL_RING;
++    for (int i = 0; i < SL_RING; i++) {
++        m.surface[i].name = IOSurfaceCreateMachPort(h->ring[i]);
++        m.surface[i].disposition = MACH_MSG_TYPE_MOVE_SEND;
++        m.surface[i].type = MACH_MSG_PORT_DESCRIPTOR;
++    }
++    m.header.msgh_id = SL_Q_SURFACES;
++    m.version = SL_VERSION;
++    m.head = h->id;
++    m.generation = h->generation;
++    m.width = h->width;
++    m.height = h->height;
++    m.fourcc = h->fourcc;
++    if (!sl_send(c, &m.header, sizeof(m), true)) {
++        /* MOVE_SEND rights are consumed only on success */
++        for (int i = 0; i < SL_RING; i++) {
++            mach_port_deallocate(mach_task_self(), m.surface[i].name);
++        }
++    }
++}
++
++static void sl_send_cursor(SLHead *h, SLClient *c)
++{
++    SLCursorMsg m = { 0 };
++    QEMUCursor *cur = h->cursor;
++
++    if (!cur) {
++        return;
++    }
++    m.body.msgh_descriptor_count = 1;
++    m.pixels.address = cur->data;
++    m.pixels.size = cur->width * cur->height * 4;
++    m.pixels.deallocate = false;
++    m.pixels.copy = MACH_MSG_VIRTUAL_COPY;
++    m.pixels.type = MACH_MSG_OOL_DESCRIPTOR;
++    m.header.msgh_id = SL_Q_CURSOR;
++    m.head = h->id;
++    m.serial = h->cursor_serial;
++    m.width = cur->width;
++    m.height = cur->height;
++    m.hot_x = cur->hot_x;
++    m.hot_y = cur->hot_y;
++    sl_send(c, &m.header, sizeof(m), true);
++}
++
++static void sl_send_mouse(SLHead *h, SLClient *c)
++{
++    SLMouseMsg m = { 0 };
++
++    m.header.msgh_id = SL_Q_MOUSE;
++    m.head = h->id;
++    m.x = h->mouse_x;
++    m.y = h->mouse_y;
++    m.visible = h->mouse_on;
++    if (c) {
++        sl_send(c, &m.header, sizeof(m), false);
++    } else {
++        sl_send_all(&m.header, sizeof(m));
++    }
++}
++
++/* ---- surface ring ----------------------------------------------------- */
++
++static void sl_release_ring(SLHead *h)
++{
++    for (int i = 0; i < SL_RING; i++) {
++        [h->ring_tex[i] release];
++        h->ring_tex[i] = nil;
++        if (h->ring[i]) {
++            CFRelease(h->ring[i]);
++            h->ring[i] = NULL;
++        }
++    }
++    h->width = h->height = 0;
++}
++
++static bool sl_ensure_ring(SLHead *h, uint32_t w, uint32_t hgt,
++                           uint32_t fourcc)
++{
++    if (h->ring[0] && w == h->width && hgt == h->height &&
++        fourcc == h->fourcc) {
++        return true;
++    }
++    sl_release_ring(h);
++    if (!w || !hgt || w > SL_MAX_SIZE || hgt > SL_MAX_SIZE) {
++        return false;
++    }
++    for (int i = 0; i < SL_RING; i++) {
++        NSDictionary *props = @{
++            (id)kIOSurfaceWidth: @(w),
++            (id)kIOSurfaceHeight: @(hgt),
++            (id)kIOSurfaceBytesPerElement: @4,
++            (id)kIOSurfacePixelFormat: @(fourcc),
++        };
++        MTLTextureDescriptor *d;
++
++        h->ring[i] = IOSurfaceCreate((CFDictionaryRef)props);
++        if (!h->ring[i]) {
++            sl_release_ring(h);
++            return false;
++        }
++        d = [MTLTextureDescriptor
++                texture2DDescriptorWithPixelFormat:
++                    fourcc == 'RGBA' ? MTLPixelFormatRGBA8Unorm
++                                     : MTLPixelFormatBGRA8Unorm
++                                             width:w height:hgt mipmapped:NO];
++        d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
++        d.storageMode = MTLStorageModeShared;
++        h->ring_tex[i] = [sl_device newTextureWithDescriptor:d
++                                                   iosurface:h->ring[i]
++                                                       plane:0];
++    }
++    h->width = w;
++    h->height = hgt;
++    h->fourcc = fourcc;
++    h->generation++;
++    h->last_sent = -1;
++    for (int i = 0; i < SL_MAX_CLIENTS; i++) {
++        if (sl_clients[i].port != MACH_PORT_NULL) {
++            sl_send_surfaces(h, &sl_clients[i]);
++        }
++    }
++    return true;
++}
++
++/* A slot nobody is reading and that is not the newest frame. */
++static int sl_pick_slot(SLHead *h)
++{
++    for (int k = 1; k <= SL_RING; k++) {
++        int s = (h->last_sent + k + SL_RING) % SL_RING;
++        bool busy = s == h->last_sent;
++
++        for (int i = 0; i < SL_MAX_CLIENTS && !busy; i++) {
++            SLClient *c = &sl_clients[i];
++            busy = c->port != MACH_PORT_NULL &&
++                   c->reading_gen[h->id] == h->generation &&
++                   c->reading[h->id] == (uint32_t)s + 1;
++        }
++        if (!busy) {
++            return s;
++        }
++    }
++    /* every slot claimed by some client: overwrite the oldest */
++    return (h->last_sent + 1) % SL_RING;
++}
++
++static void sl_send_frame(SLHead *h, uint32_t generation, uint32_t index,
++                          uint32_t source, uint64_t t_update, uint64_t t_ready)
++{
++    SLFrameMsg m = { 0 };
++
++    if (generation != h->generation) {
++        return;     /* ring was replaced while the GPU copied */
++    }
++    h->last_sent = index;
++    m.header.msgh_id = SL_Q_FRAME;
++    m.head = h->id;
++    m.generation = generation;
++    m.index = index;
++    m.source = source;
++    m.serial = ++h->serial;
++    m.x = 0;
++    m.y = 0;
++    m.w = h->width;
++    m.h = h->height;
++    m.t_update = t_update;
++    m.t_ready = t_ready;
++    sl_send_all(&m.header, sizeof(m));
++}
++
++/* ---- 2D console surface ---------------------------------------------- */
++
++static void sl_copy_2d(SLHead *h)
++{
++    uint64_t t0 = mach_absolute_time();
++    IOSurfaceRef s;
++    uint8_t *dst, *src;
++    size_t dstride, sstride, rowbytes;
++    int index;
++
++    if (!h->surface || h->scanout_active || !sl_have_clients()) {
++        return;
++    }
++    if (!sl_ensure_ring(h, surface_width(h->surface),
++                        surface_height(h->surface), 'BGRA')) {
++        return;
++    }
++    index = sl_pick_slot(h);
++    s = h->ring[index];
++
++    /* Full copy: a slot can be several frames old, damage alone is not enough. */
++    IOSurfaceLock(s, 0, NULL);
++    dst = IOSurfaceGetBaseAddress(s);
++    dstride = IOSurfaceGetBytesPerRow(s);
++    src = surface_data(h->surface);
++    sstride = surface_stride(h->surface);
++    rowbytes = (size_t)h->width * 4;
++    for (uint32_t row = 0; row < h->height; row++) {
++        memcpy(dst + row * dstride, src + row * sstride, rowbytes);
++    }
++    IOSurfaceUnlock(s, 0, NULL);
++    sl_send_frame(h, h->generation, index, SL_SOURCE_2D, t0,
++                  mach_absolute_time());
++}
++
++static void sl_gfx_update(DisplayChangeListener *dcl, int x, int y,
++                          int w, int h)
++{
++    sl_copy_2d(container_of(dcl, SLHead, dcl));
++}
++
++static void sl_gfx_switch(DisplayChangeListener *dcl,
++                          DisplaySurface *new_surface)
++{
++    SLHead *h = container_of(dcl, SLHead, dcl);
++
++    h->surface = new_surface;
++    h->need_full = true;
++}
++
++static bool sl_check_format(DisplayChangeListener *dcl,
++                            pixman_format_code_t format)
++{
++    /* BGRA in memory; QEMU converts anything else for us */
++    return format == PIXMAN_x8r8g8b8 || format == PIXMAN_a8r8g8b8;
++}
++
++static void sl_mouse_set(DisplayChangeListener *dcl, int x, int y, bool on)
++{
++    SLHead *h = container_of(dcl, SLHead, dcl);
++
++    h->mouse_x = x;
++    h->mouse_y = y;
++    h->mouse_on = on;
++    sl_send_mouse(h, NULL);
++}
++
++static void sl_cursor_define(DisplayChangeListener *dcl, QEMUCursor *c)
++{
++    SLHead *h = container_of(dcl, SLHead, dcl);
++
++    if (h->cursor) {
++        cursor_unref(h->cursor);
++        h->cursor = NULL;
++    }
++    if (!c || c->width > SL_MAX_CURSOR || c->height > SL_MAX_CURSOR) {
++        return;
++    }
++    h->cursor = cursor_ref(c);
++    h->cursor_serial++;
++    for (int i = 0; i < SL_MAX_CLIENTS; i++) {
++        if (sl_clients[i].port != MACH_PORT_NULL) {
++            sl_send_cursor(h, &sl_clients[i]);
++        }
++    }
++}
++
++/* ---- GL / Metal scanout ---------------------------------------------- */
++
++#ifdef CONFIG_EGL
++static void sl_gl_flush(DisplayChangeListener *dcl,
++                        uint32_t x, uint32_t y, uint32_t w, uint32_t hh);
++
++static void sl_frame_done_bh(void *opaque)
++{
++    SLFrameDone *d = opaque;
++    SLHead *h = d->h;
++
++    sl_send_frame(h, d->generation, d->index, SL_SOURCE_METAL,
++                  d->t_update, d->t_ready);
++    g_free(d);
++    h->read_inflight = false;
++    if (h->gl_dirty && h->scanout_active) {
++        sl_gl_flush(&h->dcl, 0, 0, 0, 0);
++    }
++}
++
++/*
++ * The Metal scanout is the guest's own buffer, valid from RESOURCE_FLUSH
++ * until the next flip (see ui/cocoa.m), so it is copied here, one copy in
++ * flight at a time.
++ */
++static void sl_gl_flush(DisplayChangeListener *dcl,
++                        uint32_t x, uint32_t y, uint32_t w, uint32_t hh)
++{
++    SLHead *h = container_of(dcl, SLHead, dcl);
++    uint64_t t0 = mach_absolute_time();
++    id<MTLCommandBuffer> cb;
++    id<MTLBlitCommandEncoder> blit;
++    SLFrameDone *done;
++    uint32_t fourcc;
++    int index;
++
++    if (!h->scanout_tex || !sl_have_clients() || h->read_inflight) {
++        h->gl_dirty = true;
++        return;
++    }
++    h->gl_dirty = false;
++
++    switch (h->scanout_tex.pixelFormat) {
++    case MTLPixelFormatBGRA8Unorm:
++    case MTLPixelFormatBGRA8Unorm_sRGB:
++        fourcc = 'BGRA';
++        break;
++    case MTLPixelFormatRGBA8Unorm:
++    case MTLPixelFormatRGBA8Unorm_sRGB:
++        fourcc = 'RGBA';
++        break;
++    default:
++        warn_report_once("seemless: scanout pixel format %lu not exported",
++                         (unsigned long)h->scanout_tex.pixelFormat);
++        return;
++    }
++    if (!sl_ensure_ring(h, h->scanout_size.width, h->scanout_size.height,
++                        fourcc)) {
++        return;
++    }
++    index = sl_pick_slot(h);
++
++    cb = [sl_queue commandBuffer];
++    blit = [cb blitCommandEncoder];
++    [blit copyFromTexture:h->scanout_tex
++              sourceSlice:0
++              sourceLevel:0
++             sourceOrigin:h->scanout_origin
++               sourceSize:h->scanout_size
++                toTexture:h->ring_tex[index]
++         destinationSlice:0
++         destinationLevel:0
++        destinationOrigin:MTLOriginMake(0, 0, 0)];
++    [blit endEncoding];
++
++    done = g_new0(SLFrameDone, 1);
++    done->h = h;
++    done->generation = h->generation;
++    done->index = index;
++    done->t_update = t0;
++    h->read_inflight = true;
++    [cb addCompletedHandler:^(id<MTLCommandBuffer> unused) {
++        done->t_ready = mach_absolute_time();
++        aio_bh_schedule_oneshot(qemu_get_aio_context(), sl_frame_done_bh,
++                                done);
++    }];
++    [cb commit];
++}
++
++static void sl_gl_scanout_texture(DisplayChangeListener *dcl,
++                                  uint32_t backing_id, bool backing_y_0_top,
++                                  uint32_t backing_width,
++                                  uint32_t backing_height,
++                                  uint32_t x, uint32_t y,
++                                  uint32_t w, uint32_t hh,
++                                  ScanoutTextureNative native)
++{
++    SLHead *h = container_of(dcl, SLHead, dcl);
++
++    [h->scanout_tex release];
++    h->scanout_tex = nil;
++    if (native.type != SCANOUT_TEXTURE_NATIVE_TYPE_METAL) {
++        warn_report_once("seemless: GL-only scanout (texture %u) not exported",
++                         backing_id);
++        h->scanout_active = false;
++        return;
++    }
++    h->scanout_tex = [(id<MTLTexture>)native.handle retain];
++    h->scanout_origin = MTLOriginMake(x, y, 0);
++    h->scanout_size = MTLSizeMake(w, hh, 1);
++    h->scanout_active = true;
++    h->gl_dirty = true;
++}
++
++static void sl_gl_scanout_disable(DisplayChangeListener *dcl)
++{
++    SLHead *h = container_of(dcl, SLHead, dcl);
++    SLDisableMsg m = { 0 };
++
++    [h->scanout_tex release];
++    h->scanout_tex = nil;
++    h->scanout_active = false;
++    h->need_full = true;
++    m.header.msgh_id = SL_Q_DISABLE;
++    m.head = h->id;
++    sl_send_all(&m.header, sizeof(m));
++}
++
++static bool sl_is_compatible_dcl(DisplayGLCtx *dgc, DisplayChangeListener *dcl)
++{
++    for (unsigned i = 0; i < sl_nheads; i++) {
++        if (dcl == &sl_heads[i].dcl) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static QEMUGLContext sl_create_context(DisplayGLCtx *dgc,
++                                       QEMUGLParams *params)
++{
++    eglMakeCurrent(qemu_egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
++                   qemu_egl_rn_ctx);
++    return qemu_egl_create_context(dgc, params);
++}
++
++static const DisplayGLCtxOps sl_dgc_ops = {
++    .dpy_gl_ctx_is_compatible_dcl = sl_is_compatible_dcl,
++    .dpy_gl_ctx_create            = sl_create_context,
++    .dpy_gl_ctx_destroy           = qemu_egl_destroy_context,
++    .dpy_gl_ctx_make_current      = qemu_egl_make_context_current,
++};
++#endif
++
++static void sl_refresh(DisplayChangeListener *dcl)
++{
++    SLHead *h = container_of(dcl, SLHead, dcl);
++
++    graphic_hw_update(dcl->con);
++    if (h->need_full && h->surface && !h->scanout_active &&
++        sl_have_clients()) {
++        h->need_full = false;
++        sl_copy_2d(h);
++    }
++#ifdef CONFIG_EGL
++    if (h->gl_dirty && h->scanout_active && !h->read_inflight) {
++        sl_gl_flush(dcl, 0, 0, 0, 0);
++    }
++#endif
++}
++
++static const DisplayChangeListenerOps sl_dcl_ops = {
++    .dpy_name               = "seemless",
++    .dpy_gfx_update         = sl_gfx_update,
++    .dpy_gfx_switch         = sl_gfx_switch,
++    .dpy_gfx_check_format   = sl_check_format,
++    .dpy_refresh            = sl_refresh,
++    .dpy_mouse_set          = sl_mouse_set,
++    .dpy_cursor_define      = sl_cursor_define,
++#ifdef CONFIG_EGL
++    .dpy_gl_scanout_disable = sl_gl_scanout_disable,
++    .dpy_gl_scanout_texture = sl_gl_scanout_texture,
++    .dpy_gl_update          = sl_gl_flush,
++#endif
++};
++
++/* ---- client messages --------------------------------------------------- */
++
++typedef struct SLPending {
++    uint32_t id;
++    mach_port_t client;          /* CONNECT: new send right; else reply port */
++    SLInMsg msg;
++} SLPending;
++
++static SLClient *sl_find_client(mach_port_t port)
++{
++    for (int i = 0; i < SL_MAX_CLIENTS; i++) {
++        if (port != MACH_PORT_NULL && sl_clients[i].port == port) {
++            return &sl_clients[i];
++        }
++    }
++    return NULL;
++}
++
++static void sl_handle_bh(void *opaque)
++{
++    SLPending *p = opaque;
++    SLClient *c;
++
++    switch (p->id) {
++    case SL_C_CONNECT: {
++        SLClient *free_slot = NULL;
++
++        for (int i = 0; i < SL_MAX_CLIENTS && !free_slot; i++) {
++            if (sl_clients[i].port == MACH_PORT_NULL) {
++                free_slot = &sl_clients[i];
++            }
++        }
++        if (!free_slot || sl_find_client(p->client)) {
++            mach_port_deallocate(mach_task_self(), p->client);
++            break;
++        }
++        free_slot->port = p->client;
++        for (unsigned i = 0; i < sl_nheads; i++) {
++            SLHead *h = &sl_heads[i];
++
++            sl_send_surfaces(h, free_slot);
++            sl_send_cursor(h, free_slot);
++            sl_send_mouse(h, free_slot);
++            /* a fresh frame for the newcomer (2D now, Metal at refresh) */
++            h->need_full = true;
++            h->gl_dirty = h->scanout_active;
++        }
++        break;
++    }
++    case SL_C_ACK:
++        c = sl_find_client(p->client);
++        if (c && p->msg.ack.head < sl_nheads && p->msg.ack.index < SL_RING) {
++            c->reading[p->msg.ack.head] = p->msg.ack.index + 1;
++            c->reading_gen[p->msg.ack.head] = p->msg.ack.generation;
++        }
++        if (p->client != MACH_PORT_NULL) {
++            mach_port_deallocate(mach_task_self(), p->client);
++        }
++        break;
++    case SL_C_SET_SIZE: {
++        SLSetSizeMsg *m = &p->msg.size;
++
++        if (m->head < sl_nheads && m->width >= 320 && m->height >= 200 &&
++            m->width <= SL_MAX_SIZE && m->height <= SL_MAX_SIZE) {
++            QemuConsole *con = sl_heads[m->head].dcl.con;
++            QemuUIInfo info = {
++                .width = m->width,
++                .height = m->height,
++                .width_mm = MIN(m->width_mm, UINT16_MAX),
++                .height_mm = MIN(m->height_mm, UINT16_MAX),
++            };
++
++            if (dpy_ui_info_supported(con)) {
++                dpy_set_ui_info(con, &info, false);
++            } else {
++                warn_report_once("seemless: scanout %u cannot be resized",
++                                 m->head);
++            }
++        }
++        if (p->client != MACH_PORT_NULL) {
++            mach_port_deallocate(mach_task_self(), p->client);
++        }
++        break;
++    }
++    }
++    g_free(p);
++}
++
++/*
++ * Receive thread: validates each message (sender uid, size, descriptors)
++ * and hands the parsed request to the main loop.  Nothing here touches
++ * display state.
++ */
++static void *sl_receive_thread(void *opaque)
++{
++    struct {
++        SLInMsg msg;
++        mach_msg_security_trailer_t trailer;
++    } buf;
++    /* without MACH_RCV_LARGE the kernel destroys oversized messages */
++    const mach_msg_option_t opt = MACH_RCV_MSG |
++        MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
++        MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_SENDER);
++
++    for (;;) {
++        mach_msg_header_t *hd = &buf.msg.header;
++        mach_msg_security_trailer_t *tr;
++        SLPending *p;
++        kern_return_t kr;
++
++        kr = mach_msg(hd, opt, 0, sizeof(buf), sl_port, MACH_MSG_TIMEOUT_NONE,
++                      MACH_PORT_NULL);
++        if (kr != KERN_SUCCESS) {
++            continue;
++        }
++        tr = (mach_msg_security_trailer_t *)((uint8_t *)hd +
++                                             round_msg(hd->msgh_size));
++        if (tr->msgh_sender.val[0] != getuid()) {
++            mach_msg_destroy(hd);
++            continue;
++        }
++
++        p = g_new0(SLPending, 1);
++        p->id = hd->msgh_id;
++        switch (hd->msgh_id) {
++        case SL_C_CONNECT:
++            if (!(hd->msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
++                hd->msgh_size < sizeof(SLConnectMsg) ||
++                buf.msg.connect.body.msgh_descriptor_count != 1 ||
++                buf.msg.connect.client.type != MACH_MSG_PORT_DESCRIPTOR ||
++                buf.msg.connect.version != SL_VERSION) {
++                goto bad;
++            }
++            p->client = buf.msg.connect.client.name;
++            break;
++        case SL_C_ACK:
++        case SL_C_SET_SIZE:
++            if ((hd->msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
++                hd->msgh_size < (hd->msgh_id == SL_C_ACK ? sizeof(SLAckMsg)
++                                                         : sizeof(SLSetSizeMsg))) {
++                goto bad;
++            }
++            /* the client identifies itself with its port as reply port */
++            p->client = hd->msgh_local_port;
++            memcpy(&p->msg, &buf.msg, sizeof(p->msg));
++            break;
++        default:
++            goto bad;
++        }
++        aio_bh_schedule_oneshot(qemu_get_aio_context(), sl_handle_bh, p);
++        continue;
++bad:
++        g_free(p);
++        mach_msg_destroy(hd);
++    }
++    return NULL;
++}
++
++/* ---- init ------------------------------------------------------------- */
++
++static void seemless_early_init(DisplayOptions *o)
++{
++    if (o->has_gl && o->gl != DISPLAY_GL_MODE_OFF) {
++        display_opengl = 1;
++    }
++}
++
++static void seemless_init(DisplayState *ds, DisplayOptions *o)
++{
++    const char *interval = getenv("SEEMLESS_REFRESH_MS");
++    kern_return_t kr;
++
++    if (!o->u.seemless.service || !*o->u.seemless.service) {
++        error_report("-display seemless needs service=<bootstrap name>");
++        exit(1);
++    }
++    kr = bootstrap_check_in(bootstrap_port, o->u.seemless.service, &sl_port);
++    if (kr != KERN_SUCCESS) {
++        error_report("seemless: cannot check in '%s' (0x%x); is another "
++                     "QEMU using it?", o->u.seemless.service, kr);
++        exit(1);
++    }
++
++    if (display_opengl) {
++#ifdef CONFIG_EGL
++        if (o->gl != DISPLAY_GL_MODE_ES) {
++            error_report("-display seemless supports gl=es only");
++            exit(1);
++        }
++        if (qemu_egl_init_dpy_cocoa(DISPLAY_GL_MODE_ES)) {
++            exit(1);
++        }
++        qemu_egl_rn_ctx = qemu_egl_init_ctx();
++        if (!qemu_egl_rn_ctx) {
++            error_report("seemless: egl_init_ctx failed");
++            exit(1);
++        }
++        sl_device = [(id<MTLDevice>)qemu_egl_angle_native_device retain];
++#else
++        error_report("-display seemless: built without EGL");
++        exit(1);
++#endif
++    }
++    if (!sl_device) {
++        sl_device = MTLCreateSystemDefaultDevice();
++    }
++    sl_queue = [sl_device newCommandQueue];
++
++#ifdef CONFIG_EGL
++    sl_dgc.ops = &sl_dgc_ops;
++#endif
++    for (unsigned i = 0; sl_nheads < SL_MAX_HEADS; i++) {
++        QemuConsole *con = qemu_console_lookup_by_index(i);
++        SLHead *h;
++
++        if (!con) {
++            break;
++        }
++        if (!qemu_console_is_graphic(con)) {
++            continue;
++        }
++        h = &sl_heads[sl_nheads];
++        h->id = sl_nheads++;
++        h->last_sent = -1;
++        h->dcl.con = con;
++        h->dcl.ops = &sl_dcl_ops;
++#ifdef CONFIG_EGL
++        if (display_opengl) {
++            qemu_console_set_display_gl_ctx(con, &sl_dgc);
++        }
++#endif
++        register_displaychangelistener(&h->dcl);
++        if (interval) {
++            update_displaychangelistener(&h->dcl, atoi(interval));
++        }
++    }
++
++    qemu_thread_create(&sl_thread, "seemless-display", sl_receive_thread,
++                       NULL, QEMU_THREAD_DETACHED);
++}
++
++static QemuDisplay qemu_display_seemless = {
++    .type       = DISPLAY_TYPE_SEEMLESS,
++    .early_init = seemless_early_init,
++    .init       = seemless_init,
++};
++
++static void register_seemless(void)
++{
++    qemu_display_register(&qemu_display_seemless);
++}
++
++type_init(register_seemless);

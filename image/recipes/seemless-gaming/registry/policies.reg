@@ -1,0 +1,36 @@
+Windows Registry Editor Version 5.00
+
+; Machine policies for seemless-default and seemless-gaming (docs/03
+; "Removal groups"). Offline hives are loaded as zSEEMLESS_<HIVE> by apply.cmd.
+
+; No consumer features, suggested apps or cloud-optimised content
+[HKEY_LOCAL_MACHINE\zSEEMLESS_SOFTWARE\Policies\Microsoft\Windows\CloudContent]
+"DisableWindowsConsumerFeatures"=dword:00000001
+"DisableConsumerAccountStateContent"=dword:00000001
+"DisableCloudOptimizedContent"=dword:00000001
+
+; Diagnostic data at the lowest level the edition honours
+[HKEY_LOCAL_MACHINE\zSEEMLESS_SOFTWARE\Policies\Microsoft\Windows\DataCollection]
+"AllowTelemetry"=dword:00000000
+
+; Widgets off
+[HKEY_LOCAL_MACHINE\zSEEMLESS_SOFTWARE\Policies\Microsoft\Dsh]
+"AllowNewsAndInterests"=dword:00000000
+
+; Do not reinstall the Teams chat app
+[HKEY_LOCAL_MACHINE\zSEEMLESS_SOFTWARE\Microsoft\Windows\CurrentVersion\Communications]
+"ConfigureChatAutoInstall"=dword:00000000
+
+; Reserved storage off (about 7 GB back on a small virtual disk)
+[HKEY_LOCAL_MACHINE\zSEEMLESS_SOFTWARE\Microsoft\Windows\CurrentVersion\ReserveManager]
+"ShippedWithReserves"=dword:00000000
+
+; No automatic BitLocker device encryption: the disk is a file on the Mac,
+; and its TPM state is per VM (resetting the TPM would lock the disk)
+[HKEY_LOCAL_MACHINE\zSEEMLESS_SYSTEM\ControlSet001\Control\BitLocker]
+"PreventDeviceEncryption"=dword:00000001
+
+; Edge Update must not reinstall the Edge browser (app id of Edge Stable);
+; it still updates the WebView2 runtime
+[HKEY_LOCAL_MACHINE\zSEEMLESS_SOFTWARE\Policies\Microsoft\EdgeUpdate]
+"Install{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}"=dword:00000000

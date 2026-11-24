@@ -56,6 +56,7 @@ import Testing
         -serial file:/r/serial.log
         -qmp unix:/r/qmp.sock,server=on,wait=off
         -qmp unix:/r/ctl.sock,server=on,wait=off
+        -qmp unix:/r/input.sock,server=on,wait=off
         -S
         """
         #expect(Self.render(command().arguments) == expected)

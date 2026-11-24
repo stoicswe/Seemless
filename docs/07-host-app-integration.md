@@ -28,7 +28,10 @@ drive it.
    ~25 GB free, optionally a Windows licence).
 2. ISO: drag-and-drop or "Get it from Microsoft" (opens the download page in
    the browser). Validate (03 stage 2) and show build/edition/language.
-3. Options: disk cap, RAM, recipe (`Default` / `Gaming`), shared folder
+3. Options: install type (automatic / manual) and, for automatic, a
+   Windows profile (`Lean` / `Lean, with Xbox` / `Fat` = stock; About
+   popover explains each). Both are required with no preselection. Disk
+   cap, RAM, shared folder
    (default: a new `~/Seemless` folder, not the whole home directory).
 4. Build: staged progress with a collapsible log. Cancellable and resumable
    per stage.
@@ -98,6 +101,7 @@ guest). Privacy rule from 06 applies. Honour
 |---------|-----------|
 | Shared folders | virtiofs (`vhost-user-fs` is Linux-only, so this depends on the QEMU fork's built-in virtiofs/9p support on macOS: spike S7). Fallbacks: QEMU 9p + a Windows 9p client, or host SMB served from a loopback-only user-space SMB server. Guest side maps a drive letter (`Z:`) and redirects known folders optionally |
 | Default share | `~/Seemless` ↔ `Z:\`. Desktop/Documents/Downloads sharing is opt-in per folder |
+| Run a Windows installer from the Mac ("Open in Seemless", built 2026-11-23) | Finder Open With (Seemless is an *alternate* handler for .exe/.msi) or Services > "Open in Seemless" → confirm sheet with VM picker (starts or resumes the VM) → `VMManager.launch` builds a read-only FAT32 USB drive labelled `SLRUN` (installer + `seemless-launch.txt` with a one-time request id) and hot-plugs it over QMP (`blockdev-add` + `device_add usb-storage`); drives older than 2 min are unplugged on the next send and all are cleared at the next start. Guest: `image/guest/SeemlessLauncher.ps1`, a logon task for every user (elevated, registered by `firstboot.cmd`), copies the installer to %TEMP% and starts it once per id; it accepts only a plain `.exe`/`.msi` file name. VMs without the task see the drive in Explorer and can run `Enable automatic installs.cmd` from it. CLI: `seemlessctl vm open <file>`. Replaced by the agent's `Launch` + shared folders in M4/S7 |
 | Open Mac file in Windows app | Stub apps declare document types (from the guest's file associations, queried by the agent). Opening a file under a shared folder → `Launch{app, files:[Z:\...]}`. Files outside any share: offer to add the folder or copy to a staging share |
 | Open Windows link in Mac browser | Optional: register a tiny guest "browser" (`SeemlessOpen.exe`) as default handler for http/https/mailto → `OpenOnHost` |
 | Drag and drop | Mac → Windows: files under shares are passed as paths; others are staged. Windows → Mac in M6 |

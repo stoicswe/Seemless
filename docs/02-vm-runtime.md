@@ -50,7 +50,7 @@ qemu-system-aarch64
   -drive if=pflash,format=raw,unit=0,readonly=on,file=<prefix>/share/qemu/edk2-aarch64-code.fd
   -drive if=pflash,format=raw,unit=1,file=<vm>/efi_vars.fd
   -device virtio-ramfb-gl,hostmem=8G,blob=true,venus=true,neptune=true,max_outputs=2
-  -display seemless,socket=<run>/display.sock          # our backend (patch); `cocoa,gl=es` for bring-up
+  -display seemless,gl=es,service=app.seemless.display.<hash of run dir>   # patches/qemu/0001; `cocoa,gl=es` until WP3.2
   -device nvme,drive=sys,serial=seemless0
   -drive if=none,id=sys,file=<vm>/system.qcow2,format=qcow2,discard=unmap,cache=writethrough,aio=threads
   -device qemu-xhci,id=usb
@@ -68,6 +68,7 @@ qemu-system-aarch64
   -rtc base=localtime
   -qmp unix:<run>/qmp.sock,server=on,wait=off       # owner (VMProcess)
   -qmp unix:<run>/ctl.sock,server=on,wait=off       # other controllers (VMRemote)
+  -qmp unix:<run>/input.sock,server=on,wait=off     # Zen mode guest input
   -S                                                    # start paused; app sends `cont`
 ```
 
@@ -158,7 +159,7 @@ stopped → starting → running ⇄ paused
 | Start | Launch swtpm, launch QEMU with `-S`, connect QMP, negotiate capabilities, `cont` |
 | Graceful stop | Agent `Shutdown` request; fall back to QMP `system_powerdown`; hard `quit` after timeout |
 | Pause/resume | QMP `stop` / `cont`. Pause automatically after N minutes with no guest windows open (configurable) |
-| Suspend to disk | QMP `migrate` to file, then quit. **Provisional**: virtio-gpu with blob resources and host GPU state is generally not migratable. Spike S6 decides whether fast resume is (a) QEMU snapshot, (b) guest hibernate (S4), or (c) keep paused in RAM only |
+| Suspend to disk | **Guest hibernate** (Windows `shutdown /h`, triggered by the agent in M4), then quit; resume is a normal start that boots from `hiberfil.sys`. **Decided by S6 (2026-11-23)**: QEMU snapshot and migrate-to-file are blocked with the 3D driver loaded (`virgl is not yet migratable`, plus non-migratable `nvme` and `usb-audio`). Hibernate does not depend on QEMU device state. Its resume with the 3D driver is not yet validated. Short pauses stay QMP `stop`/`cont` in RAM (~0.2 ms, lost if QEMU exits). See `docs/spikes/S6-fast-resume.md` |
 | Snapshots | qcow2 internal snapshots via QMP (UTM 5.0 ships this for QEMU VMs) |
 | Crash handling | Helper detects child exit; app shows a recoverable error with logs; render-server crashes are reported separately and should not stop the VM |
 | Implemented (M1) | `VMProcess` (owner) and `VMRemote` (other processes, via `vms/<name>/running.json`); stop escalates ACPI power button → QMP `quit` → SIGTERM → SIGKILL; restart = QMP `system_reset`; the last 5 QEMU logs are kept in `vms/<name>/logs/`. CLI: `seemlessctl vm run|status|pause|resume|restart|stop` |
@@ -171,9 +172,11 @@ Swift actor rather than QEMU's QAPI C bindings: newline-delimited JSON,
 `execute`/`return`/`error` correlation by `id`, and an `AsyncStream` of
 events (`SHUTDOWN`, `STOP`, `RESUME`, ...). Lessons from building it:
 
-- **Two QMP monitors.** QEMU serves one client per monitor, so the owner
+- **Three QMP monitors.** QEMU serves one client per monitor, so the owner
   (`VMProcess`) uses `qmp.sock` and every other controller (`VMRemote`, a
-  second `seemlessctl`) uses `ctl.sock`.
+  second `seemlessctl`) uses `ctl.sock` for short connections. Zen mode
+  sends input for as long as it runs, so it has its own `input.sock`
+  (2026-11-24: holding `ctl.sock` locked `vm stop` and the app out).
 - **Never block the Swift concurrency pool on a socket.** `FileHandle.bytes`
   does, and a handful of idle connections then starve all other tasks. Socket
   reads run on a dedicated thread (`LineReader`).
@@ -187,8 +190,8 @@ Keep each as an independent, minimal patch file with a header explaining why.
 
 | Patch | Purpose | Milestone |
 |-------|---------|-----------|
-| `ui/seemless` display backend | Export each scanout as an IOSurface (mach port sent over the display socket), send damage/resize/cursor events, receive input events | M3 |
-| Cursor shape/visibility/hotspot events on the display socket | Host draws the real Mac cursor; needed for seamless and game-mode capture detection | M3 |
+| `ui/seemless` display backend ✅ (`patches/qemu/0001`, WP3.1) | Export each scanout as a ring of IOSurfaces (Mach send rights, bootstrap name), frame/cursor/pointer events, size requests. Input stays on QMP `input-send-event` | M3 |
+| Cursor shape/visibility/hotspot events ✅ (in `0001`: CURSOR, MOUSE) | Host draws the real Mac cursor; needed for seamless and game-mode capture detection | M3 |
 | vCPU thread QoS | Set `QOS_CLASS_USER_INTERACTIVE` on vCPU threads | M7 |
 | Emulated Xbox 360 USB controller (`usb-xinput`) | Windows binds its inbox XUSB driver; host feeds it from GameController.framework | M7 |
 

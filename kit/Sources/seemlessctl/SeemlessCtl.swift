@@ -8,7 +8,8 @@ struct SeemlessCtl: AsyncParsableCommand {
         commandName: "seemlessctl",
         abstract: "Headless control of the Seemless Windows runtime.",
         version: Seemless.version,
-        subcommands: [VMCommand.self, ImageCommand.self, DiskCommand.self, StackCommand.self, Paths.self]
+        subcommands: [VMCommand.self, ImageCommand.self, DiskCommand.self, StackCommand.self, AgentCommand.self,
+                      MockAgentCommand.self, ScreenshotCommand.self, DisplayCommand.self, Paths.self]
     )
 }
 
@@ -46,6 +47,91 @@ struct VMSelection: ParsableArguments {
     }
 }
 
+// MARK: - agent
+
+/// Where to reach an agent: a socket path, or a running VM's agent chardev.
+struct AgentTarget: ParsableArguments {
+    @Option(help: ArgumentHelp("Agent socket (e.g. one served by `seemlessctl mock-agent`). Default: the VM's.", valueName: "path"))
+    var socket: String?
+
+    @OptionGroup var vm: VMSelection
+
+    @Option(help: "Seconds to wait for the agent's Hello.")
+    var timeout: Double = 10
+
+    func connect() async throws -> AgentClient {
+        let url: URL
+        if let socket {
+            url = URL(filePath: socket)
+        } else {
+            guard let remote = VMRemote.attach(vm.files) else { throw ValidationError("VM '\(vm.name)' is not running") }
+            url = remote.record.run.agentSocket
+        }
+        var options = AgentClient.Options(capabilities: [AgentHandshake.Capability.core, AgentHandshake.Capability.system,
+                                                         AgentHandshake.Capability.windows, AgentHandshake.Capability.apps,
+                                                         AgentHandshake.Capability.clipboard])
+        options.helloTimeout = .milliseconds(Int(timeout * 1000))
+        return try await AgentClient.connect(socket: url, options: options, connectTimeout: .seconds(2))
+    }
+}
+
+struct AgentCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "agent",
+        abstract: "Talk to the guest agent (docs/06).",
+        subcommands: [Hello.self, Info.self])
+
+    struct Hello: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Exchange Hello and print what was negotiated.")
+        @OptionGroup var target: AgentTarget
+        func run() async throws {
+            let client = try await target.connect()
+            defer { Task { await client.close() } }
+            guard let n = await client.negotiated else { return }
+            print("agent:        \(n.peerBuild)")
+            print("protocol:     \(n.peerMajor).\(n.peerMinor) (host \(AgentHandshake.protocolMajor).\(AgentHandshake.protocolMinor))")
+            print("capabilities: \(n.capabilities.joined(separator: ", "))")
+        }
+    }
+
+    struct Info: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Print GuestInfo (Windows build, drivers, agent version, GPU).")
+        @OptionGroup var target: AgentTarget
+        func run() async throws {
+            let client = try await target.connect()
+            defer { Task { await client.close() } }
+            let info = try await client.guestInfo()
+            print("windows:  \(info.osBuild)")
+            print("agent:    \(info.agentVersion)")
+            print("gpu:      \(info.gpuAdapter)")
+            for d in info.driverVersions { print("driver:   \(d.name) \(d.version)") }
+        }
+    }
+}
+
+struct MockAgentCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "mock-agent",
+        abstract: "Serve a fake guest agent on a unix socket, so the host side can be tested with no VM (docs/06).",
+        discussion: "The script format is documented on MockAgentScript (kit/Sources/SeemlessKit/Agent/MockAgent.swift); examples in proto/mock/.")
+
+    @Option(help: ArgumentHelp("Socket to listen on.", valueName: "path"))
+    var socket: String
+
+    @Option(help: ArgumentHelp("JSON script.", valueName: "file"))
+    var script: String?
+
+    @Flag(help: "Exit after the first host disconnects (default: keep serving).")
+    var once = false
+
+    func run() async throws {
+        let s = try script.map { try MockAgentScript.load(URL(filePath: $0)) } ?? MockAgentScript()
+        let agent = MockAgent(script: s) { line in print(line) }
+        setvbuf(stdout, nil, _IOLBF, 0)
+        try await agent.serve(socket: URL(filePath: socket), connections: once ? 1 : nil)
+    }
+}
+
 // MARK: - vm
 
 struct VMCommand: AsyncParsableCommand {
@@ -53,7 +139,7 @@ struct VMCommand: AsyncParsableCommand {
         commandName: "vm",
         abstract: "Create, run and control the VM.",
         subcommands: [Create.self, Show.self, Set.self, Run.self, Status.self, Pause.self, Resume.self, Restart.self,
-                      Stop.self, Delete.self, Media.self, Firmware.self, Screendump.self]
+                      Stop.self, Delete.self, Media.self, Firmware.self, Screendump.self, Open.self]
     )
 
     struct Create: AsyncParsableCommand {
@@ -103,6 +189,8 @@ struct VMCommand: AsyncParsableCommand {
         )
         @OptionGroup var vm: VMSelection
         @Flag(help: "No display (non-GL GPU device). Default is a QEMU window with GL.") var headless = false
+        @Flag(help: "No window: export the scanouts as IOSurfaces (-display seemless) for `seemlessctl screenshot` and `display`.")
+        var exportDisplay = false
         @Option(help: ArgumentHelp("Attach an ISO read-only as a USB CD-ROM (repeatable, boot order).", valueName: "iso")) var cdrom: [String] = []
         @Option(help: ArgumentHelp("Attach a raw image read-write as a USB disk (repeatable).", valueName: "img")) var usb: [String] = []
         @Flag(help: "Start with vCPUs paused; resume with `vm resume`.") var paused = false
@@ -112,6 +200,7 @@ struct VMCommand: AsyncParsableCommand {
 
         func validate() throws {
             if firmwareSetup && cdPrompt { throw ValidationError("--firmware-setup and --cd-prompt are exclusive") }
+            if headless && exportDisplay { throw ValidationError("--headless and --export-display are exclusive") }
         }
 
         func run() async throws {
@@ -122,7 +211,8 @@ struct VMCommand: AsyncParsableCommand {
             for (i, path) in cdrom.enumerated() { drives.append(try drive("cd\(i)", path, cdrom: true)) }
             for (i, path) in usb.enumerated() { drives.append(try drive("usb\(i)", path, cdrom: false)) }
             let keys: BootKeys? = firmwareSetup ? .firmwareSetup : cdPrompt ? .cdPrompt : nil
-            let options = LaunchOptions(display: headless ? .headless : .cocoaWindow, removableDrives: drives,
+            let display: LaunchOptions.Display = headless ? .headless : exportDisplay ? .exported : .cocoaWindow
+            let options = LaunchOptions(display: display, removableDrives: drives,
                                         startPaused: true, serialLog: serialLog.map { URL(filePath: $0) },
                                         bootKeys: keys)
             let runDir = vm.layout.runDirectory(pid: getpid())
@@ -285,6 +375,24 @@ struct VMCommand: AsyncParsableCommand {
         }
     }
 
+    struct Open: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Run a Windows installer (.exe/.msi) from the Mac inside the running VM.",
+            discussion: """
+            Hot-plugs a read-only USB drive labelled SLRUN with the installer. VMs installed by \
+            `image build` start it by themselves once a user is logged on; older VMs show the drive \
+            in File Explorer (run "Enable automatic installs.cmd" on it once).
+            """)
+        @OptionGroup var vm: VMSelection
+        @Argument(help: "Installer on the Mac.") var installer: String
+        func run() async throws {
+            let manager = VMManager(layout: vm.layout, stack: try vm.stack())
+            let request = try await manager.launch(vm.name, installer: URL(filePath: installer).standardizedFileURL,
+                                                   assets: ImageAssets.locate())
+            print("sent \(request.fileName) (request \(request.id.prefix(8)))")
+        }
+    }
+
     struct Screendump: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Save the VM's current screen as PNG (QMP screendump; QEMU's view, before the app's display path exists).")
@@ -405,7 +513,7 @@ struct ImageCommand: AsyncParsableCommand {
         @Option(help: "Windows 11 ARM64 ISO.") var iso: String
         @Option(help: "Edition index from `image inspect` (default: Pro).") var edition: Int?
         @Option(help: "Windows account name.") var user = "Seemless"
-        @Option(help: "Recipe under image/recipes.") var recipe = "seemless-default"
+        @Option(help: "Recipe under image/recipes: seemless-default (Lean), seemless-gaming (Lean, with Xbox) or stock (Fat, nothing removed).") var recipe = "seemless-default"
         @Option(help: "vCPUs.") var cpus: Int?
         @Option(help: "Memory in MiB.") var memory: Int?
         @Option(help: "Disk size in GiB.") var disk = 64
