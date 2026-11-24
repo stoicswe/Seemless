@@ -222,13 +222,23 @@ D-Bus cannot carry Mach ports). Note: `docs/spikes/S3-display-export.md`.
   remains an M7 optimisation.
 - Host side: `SeemlessKit.DisplayClient` (Swift, Mach plumbing in the
   `CSeemlessDisplay` C target; no QEMU code). `LaunchOptions.Display.exported`
-  starts QEMU this way; the app keeps `cocoa` until WP3.2.
+  starts QEMU this way. The app starts `cocoa` by default; "Start without
+  Window" exports, and Show Display then opens the app's desktop window
+  (below).
 
 ### App-side renderer
 
 - `DisplayRenderer` owns a `MTLDevice` and wraps each scanout IOSurface as an
   `MTLTexture`.
 - Desktop/game mode: one `CAMetalLayer`, blit with optional scaling filter.
+  First version (2026-11-24): `app/Seemless/Display/DesktopWindow.swift`
+  (`DesktopSession`, `DesktopView`) reuses Zen's `ZenRenderer` with a full
+  crop; geometry is `SeemlessKit.DesktopGeometry` (aspect fit, view point →
+  guest pixel, window sizing). A titled, resizable window whose content keeps
+  the guest's aspect ratio; resizing scales and does **not** change the guest
+  resolution yet. A guest resolution change reshapes the window (same width).
+  Input is QMP `input-send-event` on `input.sock`, as Zen, so Zen and the
+  desktop window are never open together for one VM.
 - Seamless mode: each window view samples a sub-rect of the atlas texture
   (05). Present with `CAMetalLayer.presentsWithTransaction = false`,
   `displaySyncEnabled` on by default.

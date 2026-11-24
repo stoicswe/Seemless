@@ -28,6 +28,14 @@ final class ZenSession: NSObject, ZenInputSink, ZenWindowBehavior, NSWindowDeleg
     /// Called once when the session ends by itself (agent gone or silent, VM
     /// stopped), with the reason to show (nil: nothing to report); not after `stop()`.
     var onEnd: ((ZenSession, String?) -> Void)?
+    /// Called once, instead of `onEnd`, when the guest closed its last app
+    /// window: the app shows the whole desktop instead (docs/05 "Mode transitions").
+    var onLastWindowClosed: ((ZenSession) -> Void)?
+    private var lastWindowWatch = ZenLastWindowWatch()
+    private var lastWindowCheck: Task<Void, Never>?
+    /// Finishes once `stop()` has closed the QMP input connection, so the
+    /// desktop window can take `input.sock` over.
+    private(set) var closed: Task<Void, Never>?
     private var stopped = false
     /// Last hover hit test per window: the guest point it was taken at and
     /// the answer. A mouse-down uses it synchronously (docs/05, host-driven move).
@@ -194,6 +202,23 @@ final class ZenSession: NSObject, ZenInputSink, ZenWindowBehavior, NSWindowDeleg
     private func handle(_ body: Seemless_V1_Envelope.OneOf_Body) {
         guard !stopped else { return }
         apply(model.apply(body))
+        watchForLastWindow()
+    }
+
+    /// The guest closed its last app window (minimised ones still count):
+    /// after a short debounce, hand over to the desktop window.
+    private func watchForLastWindow() {
+        guard case .checkAfter(let delay) = lastWindowWatch.update(hasOpenWindows: model.hasOpenAppWindows, now: now)
+        else { return }
+        lastWindowCheck?.cancel()
+        lastWindowCheck = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, !self.stopped,
+                  self.lastWindowWatch.shouldSwitch(hasOpenWindows: self.model.hasOpenAppWindows, now: self.now)
+            else { return }
+            self.stop()
+            self.onLastWindowClosed?(self)
+        }
     }
 
     private func apply(_ changes: [ZenWindowModel.Change]) {
@@ -224,6 +249,8 @@ final class ZenSession: NSObject, ZenInputSink, ZenWindowBehavior, NSWindowDeleg
         // A new agent: it may hit-test now, and old answers are stale. Its
         // snapshot follows and replaces the window list (docs/06).
         hitTestSupported = true
+        lastWindowWatch.reset()          // its snapshot is a fresh start
+        lastWindowCheck?.cancel()
         for id in Array(lastHit.keys) { lastHit[id] = nil }
         for id in Array(hoverThrottle.keys) { hoverThrottle[id] = nil }
     }
@@ -440,16 +467,17 @@ final class ZenSession: NSObject, ZenInputSink, ZenWindowBehavior, NSWindowDeleg
         for t in hoverRetry.values { t.cancel() }
         pendingMoves.removeAll()
         hoverRetry.removeAll()
+        lastWindowCheck?.cancel()
         for w in windows.values { w.delegate = nil; w.close() }
         windows.removeAll()
         sendInput.yield(.releaseAll)      // after any queued key-downs
         sendInput.finish()
         for t in tasks.dropFirst() { t.cancel() }  // the input consumer drains, then ends
         let agent = agent, qmp = qmp, inputDone = tasks.first
-        Task {
+        closed = Task {
             await inputDone?.value
-            await agent.close()
             await qmp.close()
+            await agent.close()
         }
         display.close()
     }

@@ -526,3 +526,52 @@ private func window(_ id: UInt64, _ x: Int32, _ y: Int32, _ w: UInt32, _ h: UInt
         #expect(ZenGeometry.place(inside, in: area) == inside)
     }
 }
+
+@Suite struct ZenLastWindowWatchTests {
+    @Test func firesAfterTheLastWindowClosesAndStaysClosed() {
+        var w = ZenLastWindowWatch(delay: 0.3)
+        #expect(w.update(hasOpenWindows: true, now: 0) == .none)
+        #expect(w.update(hasOpenWindows: false, now: 1) == .checkAfter(0.3))
+        #expect(w.update(hasOpenWindows: false, now: 1.1) == .none, "one timer is enough")
+        #expect(!w.shouldSwitch(hasOpenWindows: false, now: 1.2), "too early")
+        #expect(w.shouldSwitch(hasOpenWindows: false, now: 1.3))
+    }
+
+    @Test func neverFiresWhenZenStartsEmpty() {
+        var w = ZenLastWindowWatch()
+        #expect(w.update(hasOpenWindows: false, now: 0) == .none)
+        #expect(!w.shouldSwitch(hasOpenWindows: false, now: 10))
+    }
+
+    @Test func aNewWindowWithinTheDelayCancels() {
+        var w = ZenLastWindowWatch(delay: 0.3)
+        _ = w.update(hasOpenWindows: true, now: 0)
+        _ = w.update(hasOpenWindows: false, now: 1)        // splash screen closed
+        #expect(w.update(hasOpenWindows: true, now: 1.1) == .none)  // main window opened
+        #expect(!w.shouldSwitch(hasOpenWindows: true, now: 1.3))
+        #expect(!w.shouldSwitch(hasOpenWindows: false, now: 1.3), "cancelled: needs a new empty period")
+        #expect(w.update(hasOpenWindows: false, now: 2) == .checkAfter(0.3))
+        #expect(w.shouldSwitch(hasOpenWindows: false, now: 2.3))
+    }
+
+    @Test func resetForgetsWindows() {
+        var w = ZenLastWindowWatch()
+        _ = w.update(hasOpenWindows: true, now: 0)
+        w.reset()
+        #expect(w.update(hasOpenWindows: false, now: 1) == .none)
+    }
+
+    @Test func minimisedWindowsCountAsOpen() {
+        var m = ZenWindowModel(bounds: GuestRect(x: 0, y: 0, width: 1280, height: 800))
+        _ = m.apply(.windowSnapshot(.with { $0.windows = [window(1, 100, 80, 640, 480), window(2, 0, 0, 200, 100, kind: .tooltip)] }))
+        #expect(m.hasOpenAppWindows)
+        _ = m.apply(.windowUpdated(.with {
+            $0.window = .with { $0.id = 1; $0.state = .minimized }
+            $0.changed = [.state]
+        }))
+        #expect(m.mirrored.isEmpty)
+        #expect(m.hasOpenAppWindows, "minimised: the app still runs")
+        _ = m.apply(.windowRemoved(.with { $0.id = 1 }))
+        #expect(!m.hasOpenAppWindows, "a tooltip alone is not an app window")
+    }
+}

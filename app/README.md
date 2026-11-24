@@ -25,5 +25,8 @@ own location, so run it from `build/app/` inside the repository (or set
 | `Components.swift` | `GlassSection` (shared `SectionMetrics`), status badge, ISO drop zone, formatting |
 
 Built with SwiftPM until the XPC helper and entitlements (WP3.3) need an
-Xcode project. VMs run as children of the app; QEMU shows its own window
-until the display path (WP3.2) exists. "Show Display" brings it forward.
+Xcode project. VMs run as children of the app. "Start" gives QEMU its own
+window, and "Show Display" brings it forward. "Start without Window" exports
+the display; "Show Display" then opens the app's own desktop window
+(`Display/DesktopWindow.swift`), which shows the whole guest screen live and
+passes pointer and keys to the guest. It closes when the VM stops.

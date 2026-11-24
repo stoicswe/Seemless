@@ -83,7 +83,12 @@ and shows each Windows window as a native Mac window. The plan lives in
   `SEEMLESS_OPEN=zen:<vm>` enters it at launch,
   `SEEMLESS_ZEN_AGENT=<mock-agent socket>` drives windows from a script
   until the Windows agent exists, and `SEEMLESS_ZEN_SCALE` sets points per
-  guest pixel. `SEEMLESS_OPEN=select:<vm>` only selects a VM (for
+  guest pixel. `SEEMLESS_OPEN=display:<vm>` runs Show Display at launch
+  (the desktop window for an exported display); `SEEMLESS_DISPLAY_TYPE='text\n'`
+  then types into it through the window (lowercase, digits, space, `\n`;
+  synthetic CGEvents need a permission this Mac lacks), and
+  `SEEMLESS_DISPLAY_SCALE` sets points per guest pixel.
+  `SEEMLESS_OPEN=select:<vm>` only selects a VM (for
   screenshots of the running layout). `SEEMLESS_ZEN_STATS=1` logs hit
   tests, `SetWindowRect`s and frames every 10 s, and each click's guest pixel.
   Real Windows windows before the agent exists: run

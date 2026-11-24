@@ -40,6 +40,9 @@ final class AppModel {
     func isInZen(_ name: String) -> Bool { zenSessions[name] != nil }
     /// VMs whose Zen session is connecting (so a second Enter does not start another).
     private var zenStarting: Set<String> = []
+    /// Desktop windows (whole guest screen) for VMs with an exported display (WP3.2).
+    private var desktopSessions: [String: DesktopSession] = [:]
+    private var desktopStarting: Set<String> = []
 
     struct ScreenshotResult: Identifiable {
         let id = UUID()
@@ -91,6 +94,13 @@ final class AppModel {
         launchSwitchesDone = true
         guard let open = ProcessInfo.processInfo.environment["SEEMLESS_OPEN"] else { return }
         if open.hasPrefix("select:") { return }  // handled in init and refresh
+        if open.hasPrefix("display:") {
+            let vm = String(open.dropFirst("display:".count))
+            await refresh()
+            selection = vm
+            showDisplay(vm)
+            return
+        }
         if open.hasPrefix("zen:") {
             let vm = String(open.dropFirst("zen:".count))
             await refresh()
@@ -267,8 +277,6 @@ final class AppModel {
 
     enum SnapshotOp { case create, revert, delete }
 
-    /// Brings QEMU's display window to the front (until the app has its own
-    /// display path, WP3.2).
     // MARK: Zen mode
 
     /// Shows the VM's Windows windows as chrome-less Mac windows (Z1 preview).
@@ -285,9 +293,14 @@ final class AppModel {
         let env = ProcessInfo.processInfo.environment
         let agentSocket = env["SEEMLESS_ZEN_AGENT"].map { URL(filePath: $0) } ?? remote.record.run.agentSocket
         let scale = env["SEEMLESS_ZEN_SCALE"].flatMap(Double.init).map { CGFloat($0) } ?? 1
+        // Zen and the desktop window are two views of one screen and share
+        // the input monitor: entering Zen closes the desktop window first.
+        let desktop = desktopSessions.removeValue(forKey: name)
+        desktop?.stop()
         zenStarting.insert(name)
         Task {
             defer { zenStarting.remove(name) }
+            await desktop?.closed?.value
             do {
                 let session = try await ZenSession.start(vm: name, run: remote.record.run, agentSocket: agentSocket,
                                                          pointsPerPixel: scale)
@@ -298,6 +311,13 @@ final class AppModel {
                     guard self.zenSessions[ended.vm] === ended else { return }
                     self.zenSessions[ended.vm] = nil
                     if let reason { self.error = AppError(title: "Zen mode ended for “\(ended.vm)”", message: reason) }
+                }
+                // The guest closed its last app window: show the whole desktop
+                // (owner, 2026-11-24; docs/05 "Mode transitions"). No alert.
+                session.onLastWindowClosed = { ended in
+                    guard self.zenSessions[ended.vm] === ended else { return }
+                    self.zenSessions[ended.vm] = nil
+                    self.showDisplay(ended.vm, after: ended)
                 }
                 zenSessions[name] = session
             } catch {
@@ -310,9 +330,56 @@ final class AppModel {
         zenSessions.removeValue(forKey: name)?.stop()
     }
 
-    func showDisplay(_ name: String) {
+    /// Shows the VM's screen. A VM started with an exported display ("Start
+    /// without Window") gets the app's own desktop window (opened, or brought
+    /// forward); one with QEMU's window has that window brought to the front.
+    /// Leaves Zen mode first: the two are views of the same screen.
+    /// SEEMLESS_DISPLAY_SCALE sets Mac points per guest pixel (default 1).
+    func showDisplay(_ name: String) { showDisplay(name, after: nil) }
+
+    /// `endedZen`: a Zen session that already stopped itself; its input
+    /// connection must close before the desktop window opens its own.
+    private func showDisplay(_ name: String, after endedZen: ZenSession?) {
+        if let session = desktopSessions[name] { session.show(); return }
+        guard !desktopStarting.contains(name), let manager else { return }
+        guard let remote = VMRemote.attach(manager.store.files(for: name)) else {
+            activateQEMUWindow(name)
+            return
+        }
+        let scale = ProcessInfo.processInfo.environment["SEEMLESS_DISPLAY_SCALE"].flatMap(Double.init).map { CGFloat($0) } ?? 1
+        desktopStarting.insert(name)
+        Task {
+            defer { desktopStarting.remove(name) }
+            // Zen's input connection must be gone before ours connects.
+            let zen = zenSessions.removeValue(forKey: name) ?? endedZen
+            zen?.stop()
+            await zen?.closed?.value
+            do {
+                let session = try await DesktopSession.start(vm: name, run: remote.record.run, pointsPerPixel: scale)
+                session.onEnd = { ended in
+                    guard self.desktopSessions[ended.vm] === ended else { return }
+                    self.desktopSessions[ended.vm] = nil
+                }
+                desktopSessions[name] = session
+                session.show()
+                if let text = ProcessInfo.processInfo.environment["SEEMLESS_DISPLAY_TYPE"] {
+                    try? await Task.sleep(for: .seconds(1))
+                    await session.typeForTesting(text.replacingOccurrences(of: "\\n", with: "\n"))
+                }
+            } catch DisplayError.notExported {
+                activateQEMUWindow(name)    // QEMU has its own window
+            } catch {
+                self.error = AppError(title: "Couldn’t show the display of “\(name)”", message: String(describing: error))
+            }
+        }
+    }
+
+    /// Brings QEMU's own display window (`-display cocoa`) to the front.
+    private func activateQEMUWindow(_ name: String) {
         guard let pid = item(name)?.status.qemuPID,
               let app = NSRunningApplication(processIdentifier: pid) else { return }
+        // Cooperative activation (macOS 14+): the active app yields first.
+        NSApp.yieldActivation(to: app)
         app.activate()
     }
 

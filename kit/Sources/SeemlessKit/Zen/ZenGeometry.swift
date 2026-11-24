@@ -109,6 +109,11 @@ public struct ZenGeometry: Sendable, Equatable {
     /// QEMU's absolute pointer axes (`usb-tablet`, 0...32767 across the
     /// display) for a guest pixel, clamped to the display.
     public func absoluteAxes(_ g: CGPoint) -> (x: Int, y: Int) {
+        Self.absoluteAxes(g, guestWidth: guestWidth, guestHeight: guestHeight)
+    }
+
+    /// `absoluteAxes` for any display size (also used by the desktop window).
+    public static func absoluteAxes(_ g: CGPoint, guestWidth: Int, guestHeight: Int) -> (x: Int, y: Int) {
         func axis(_ v: CGFloat, _ size: Int) -> Int {
             guard size > 1 else { return 0 }
             let n = min(max(v / CGFloat(size - 1), 0), 1)

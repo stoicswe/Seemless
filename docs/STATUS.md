@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-11-23 (account fix verified; S2 renderer runs, reset crash found)
+Updated: 2026-11-24 (Show Display opens the app's desktop window for exported displays)
 
 ## Done
 
@@ -167,6 +167,61 @@ Updated: 2026-11-23 (account fix verified; S2 renderer runs, reset crash found)
   - **Not done:** the UTM repro, skipped by the owner's choice (UTM not
     installed; root cause unambiguous).
   - The hvf reset fix (utmapp/qemu#6) is already in the pinned QEMU.
+- **Zen Dock icons** (2026-11-24, owner requirement): a running Windows
+  app's Dock icon must look like that app's icon. Recorded in docs/05 ("App
+  identity on the Mac side") and the roadmap; WP6.8 is no longer optional.
+  An interim step is designed: minimised tiles badged with the app's icon.
+  Nothing is built; it needs `GetIcon` from the agent.
+- **Zen bug-testing round 1** (2026-11-24, on `fw` with the mock agent, then
+  a real Notepad on a fresh VM `zen1` by the owner): 11 host bugs fixed
+  (owned dialogs, minimised-at-start, agent silence, Zen holding `ctl.sock`,
+  frozen windows after QEMU exits, re-enter leak, and others). Following the
+  owner's Notepad trial, moves are now Mac-only, live resize is unstretched,
+  the guest window stays in the work area, and the Windows cursor is hidden.
+  `scripts/check.sh` passed with 151 Swift tests. Results and manual checks:
+  `docs/testing/seamless.md`.
+- **Desktop window for exported displays** (2026-11-24, WP3.2 started; the
+  owner found Show Display did nothing for a VM started with "Start without
+  Window"):
+  - **What it does:** Show Display on such a VM opens (or focuses) one
+    titled, resizable Mac window with scanout 0 live. Pointer, buttons,
+    scroll and keys go to the guest over QMP on `input.sock`, as in Zen.
+    The content keeps the guest's aspect ratio. A guest resolution change
+    reshapes the window. The window closes when the VM stops (QMP closes).
+    A VM with QEMU's own window still gets that window brought forward.
+  - Zen and the desktop window share `input.sock`, so opening one closes the
+    other for that VM.
+  - **Kit:** `DesktopGeometry` (`kit/.../Display/`), 7 tests.
+  - **App:** `app/Seemless/Display/DesktopWindow.swift`, reusing
+    `ZenRenderer`, `GuestInput` and `GuestKeyMap`.
+  - New developer switches: `SEEMLESS_OPEN=display:<vm>` and
+    `SEEMLESS_DISPLAY_TYPE`.
+  - **Verified on `fw` (firmware, UEFI shell, 800×600):**
+    - the window showed the live shell (window screenshot seen);
+    - text typed through the window ran in the shell (`seemlessctl
+      screenshot` seen);
+    - stopping the VM closed the window.
+  - **Typing was checked with synthetic `NSEvent`s sent through the
+    window**, not real keystrokes. Posting CGEvents needs a permission this
+    Mac does not grant.
+  - **Not verified:**
+    - pointer input, and a guest resolution change (the firmware does not
+      change mode; the logic is unit-tested);
+    - the QEMU-window fallback being brought forward. macOS kept the old
+      front app when the app was launched in the background, and also when
+      a script activated QEMU directly. It now yields activation first, the
+      macOS 14+ pattern, but that needs a real click to check.
+  - **Zen → desktop on the last window** (owner requirement, 2026-11-24):
+    when the guest closes its last app window, Zen ends with no alert and
+    the desktop window opens. Minimised windows still count as open, and
+    there is a 300 ms debounce. Starting empty, agent loss, VM stop and Exit
+    Zen don't trigger it. Kit: `ZenLastWindowWatch`, 5 tests. Verified with
+    the mock agent on `fw` (docs/testing/seamless.md round 3). The handover
+    now waits for the old session's QMP connection to close (no fixed sleep),
+    both ways.
+  - **Still to do for WP3.2:** resizing the window should change the guest
+    resolution (`DisplayClient.requestSize`), the guest pointer shape,
+    HiDPI, and Notepad on a booting Windows VM.
 - **Zen windows behave like windows** (2026-11-24, owner request; Z5's
   host side pulled forward):
   - macOS rounded corners (16 pt) with the Mac shadow.
@@ -279,7 +334,7 @@ Updated: 2026-11-23 (account fix verified; S2 renderer runs, reset crash found)
   - Note: `docs/spikes/WP7b0-d3d12-trigger-review.md`.
 - FAT image operations (`hdiutil`/`diskutil`) are serialised: in parallel
   they made tests 4-10x slower.
-- 104 Swift tests and 9 Rust tests, all passing (`scripts/check.sh`).
+- 163 Swift tests and 9 Rust tests, all passing (`scripts/check.sh`, 2026-11-24).
 - Upstream research: UTM 5.0's Neptune/Triton DirectX stack and Tiny11
   Builder 0.2.0 state (see `11-references.md`).
 
@@ -323,8 +378,9 @@ Updated: 2026-11-23 (account fix verified; S2 renderer runs, reset crash found)
   yet, and nothing has crossed virtio-serial (WP4.2). The bulk channel and
   `WindowModel` are not started.
 - Suspend/resume-from-disk (S6), sealing a golden image, guest agent (M4)
-  not started. App: VM manager only; display,
-  helper, onboarding flow, menu bar extra not started.
+  not started. App: VM manager, Zen preview and a first desktop window
+  (WP3.2 ◐: no resize → guest resolution yet). The helper, onboarding flow
+  and menu bar extra are not started.
 - App actions that start a VM from the app (buttons, sheets) were not
   clicked in this session: they call the same `VMManager` paths the tests
   cover, but the UI wiring itself is unverified by hand.
@@ -415,6 +471,7 @@ Updated: 2026-11-23 (account fix verified; S2 renderer runs, reset crash found)
 | 2026-11-23 | Image fix | Account created as admin by SYSTEM before OOBE (OOBE ignored the Administrators group on 26300); FIRSTBOOT_OK on a fresh build; OOBE half awaits the owner |
 | 2026-11-23 | S2 + main | Virtio-gpu reset abort fixed: first patch failed on a cold start (owner's crash report); revised patch resolves eglDestroyImageKHR at init; 4 cold boots + 10 resets clean |
 | 2026-11-23 | D3a | Owner chose MoltenVK as the D3D12 Vulkan driver (S8 had recommended KosmicKrisp) |
+| 2026-11-24 | WP3.2 (start) | Show Display opens a live desktop window for exported displays (fw: view and typing checked; window closes on VM stop); QEMU-window fallback kept. Zen → desktop when the last app window closes (mock-agent checked) |
 | 2026-11-24 | Zen Z1 | Chrome-less per-window crop windows + QMP input, mock-agent driven; crop verified on fw; app layout refined |
 | 2026-11-24 | WP3.1 | ui/seemless display backend patch + SeemlessKit receiver + `seemlessctl screenshot`; 3D desktop visible to agents (VM wp31) |
 | 2026-11-24 | S9 | Steam-in-VM feasibility: pseudo-prefix design, shape A (Steam in VM) / B (cross-VM lsteamclient); experiments E1–E4 await owner |

@@ -149,6 +149,21 @@ Done in round 2 on a real Windows VM instead (below).
 | Zen start on a still screen | **Fixed:** it waited for a new frame (6-15 s on a still desktop). It now uses the display size QEMU announces on connect |
 | Caps Lock, modifiers after focus loss | Not reported by the owner in this round |
 
+## Round 3 — 2026-11-24, `fw` + mock agent: Zen → desktop on last window
+
+The owner's requirement: when the last Windows app window closes, Zen ends and
+the full desktop window opens. The mock script snapshots one window, then
+minimises and restores it. It removes it and adds another 100 ms later (a
+splash screen swap), then removes that one. The app's on-screen windows were
+polled every 50 ms.
+
+| Check | Result |
+|-------|--------|
+| Minimised only (in the Dock) | **Pass.** Zen stayed; the window came back on restore |
+| Splash swap (remove, add 100 ms later) | **Pass.** Zen stayed; the new window opened |
+| Last window removed | **Pass.** The Zen window closed, and 0.4 s later the desktop window `fw` (800×600 content) opened with the live screen (window screenshot seen). No alert. The mock agent saw the host disconnect, and QEMU had one `input.sock` client (the desktop window's) |
+| Zen started with no windows; agent restart | Unit tests only (`ZenLastWindowWatchTests`) |
+
 ## Known gaps (not bugs in Z1)
 
 - Windows windows that overlap the mirrored one in the guest show in its

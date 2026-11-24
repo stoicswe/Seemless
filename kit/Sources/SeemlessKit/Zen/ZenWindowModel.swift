@@ -56,6 +56,70 @@ public struct ZenWindowInfo: Sendable, Equatable {
     }
 }
 
+extension ZenWindowInfo {
+    /// An app window that is open: mirrored now, or a minimised app window
+    /// or dialog (still running, shown in the Dock).
+    public var isOpenAppWindow: Bool {
+        if isMirrored { return true }
+        guard state == .minimized else { return false }
+        switch kind {
+        case .normal, .dialog, .unspecified: return true
+        default: return false
+        }
+    }
+}
+
+/// Decides when Zen should hand over to the desktop window because the
+/// guest closed its last app window (owner, 2026-11-24: "Closing all the
+/// running programs that have windows in Zen mode should cause the VM to
+/// show the full windows desktop view"). docs/05 "Mode transitions".
+///
+/// Fires only after open app windows went from some to none and stayed
+/// none for `delay` (an app that swaps a splash screen for its main window
+/// must not flip to the desktop and back). Starting with no windows never
+/// fires. Agent loss, VM stop and Exit Zen end the session instead, so
+/// they never reach here. Pure logic: the session feeds it and runs the timer.
+public struct ZenLastWindowWatch: Sendable, Equatable {
+    public static let defaultDelay = 0.3
+    public let delay: Double
+    /// Some app window has been open since the start (or the last reset).
+    public private(set) var sawWindows = false
+    /// When the set became empty, while a switch is pending.
+    public private(set) var emptySince: Double?
+
+    public init(delay: Double = Self.defaultDelay) { self.delay = delay }
+
+    public enum Action: Sendable, Equatable {
+        case none
+        /// Check again (`shouldSwitch`) after this many seconds.
+        case checkAfter(Double)
+    }
+
+    /// Call after every change to the window model.
+    public mutating func update(hasOpenWindows: Bool, now: Double) -> Action {
+        if hasOpenWindows {
+            sawWindows = true
+            emptySince = nil              // a new window cancels a pending switch
+            return .none
+        }
+        guard sawWindows, emptySince == nil else { return .none }
+        emptySince = now
+        return .checkAfter(delay)
+    }
+
+    /// At the timer: true if the set is still empty and has been for `delay`.
+    public func shouldSwitch(hasOpenWindows: Bool, now: Double) -> Bool {
+        guard !hasOpenWindows, let since = emptySince else { return false }
+        return now - since >= delay - 1e-9
+    }
+
+    /// Forget the history (a restarted agent: its snapshot is a fresh start).
+    public mutating func reset() {
+        sawWindows = false
+        emptySince = nil
+    }
+}
+
 /// The host's view of the guest's top-level windows, built from the agent's
 /// `WindowSnapshot` / `WindowAdded` / `WindowUpdated` / `WindowRemoved`
 /// messages (docs/05, docs/06). Pure logic; the Zen UI applies its changes.
@@ -97,6 +161,10 @@ public struct ZenWindowModel: Sendable {
     }
 
     public var mirrored: [ZenWindowInfo] { order.compactMap { windows[$0] }.filter(\.isMirrored) }
+
+    /// True while some app window is open: mirrored, or minimised (the app
+    /// still runs; it sits in the Dock). Drives `ZenLastWindowWatch`.
+    public var hasOpenAppWindows: Bool { windows.values.contains { $0.isOpenAppWindow } }
 
     /// Applies one agent message. Bodies that are not about windows give no changes.
     public mutating func apply(_ body: Seemless_V1_Envelope.OneOf_Body) -> [Change] {

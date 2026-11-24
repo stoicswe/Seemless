@@ -197,9 +197,21 @@ so the right guest window must be under the guest cursor and have focus.
 
 Windows from the same guest application should group like a Mac app:
 
+- **Requirement (owner, 2026-11-24):** in Zen mode the Dock icon for a
+  running Windows app looks like that app's own icon, so the user can tell
+  which app it is. Per-app Dock tiles are therefore required, not optional
+  (WP6.8 in the roadmap). The icon comes from the agent: `icon_id` on the
+  window, then `GetIcon` at 512 px (docs/06). The host checks it as an
+  untrusted image (size, format, ImageIO only).
 - Group key: AppUserModelID if set, else process image path.
 - v1: all guest windows belong to `Seemless.app`'s single Dock icon; the Dock
   menu and Window menu list them grouped by app, with icons.
+  - **Interim step towards the requirement (v1):** a minimised Zen window's
+    Dock tile shows the window's last frame with the Windows app's icon as
+    the badge, through `NSWindow.dockTile`'s content view, in place of the
+    Seemless badge macOS draws by default. This needs no extra processes.
+    Changing `Seemless.app`'s own icon to the frontmost Windows app's icon
+    was rejected: with two Windows apps open, one icon would be wrong.
 - v2 (M6): **stub apps**. For each pinned Windows app, generate a tiny
   `.app` bundle in `~/Applications/Seemless/` (name, icon extracted by the
   agent, a launcher executable that messages `Seemless.app`). To get separate
@@ -217,6 +229,7 @@ Windows from the same guest application should group like a Mac app:
 | Seamless → Game | Agent reports a fullscreen-class window on display 1 that is foreground for more than 500 ms, or the user presses the game-mode shortcut |
 | Game → Seamless | That window closes, loses fullscreen, or the user presses the release shortcut |
 | Seamless ↔ Desktop | User toggle. Desktop mode shows scanout 0 in one window; the agent stops captures to save GPU |
+| Zen → Desktop | The guest closed its last app window (owner, 2026-11-24: "Closing all the running programs that have windows in Zen mode should cause the VM to show the full windows desktop view"). Open app windows went from some to none and stayed none for 300 ms (an app that swaps a splash screen for its main window does not flip). Minimised windows still count as open. It never fires when Zen starts with no windows, when the agent is lost or restarts, when QMP closes, or on Exit Zen. Zen ends with no alert, closes its input connection, then the desktop window opens (the Show Display path). Logic: `ZenLastWindowWatch` and `ZenWindowModel.hasOpenAppWindows` |
 | Any → "Agent lost" | No heartbeat for 3 s: host falls back to desktop mode with a banner, so the user is never left with no way to see Windows. **Z1 (2026-11-24):** with no desktop mode window yet, Zen ends with an alert "The Windows agent stopped responding." It also ends, silently, when QMP closes (the VM stopped) |
 
 ## Readiness and build order (2026-11-24)
@@ -292,8 +305,11 @@ Build order:
        a Windows 11 frame and applies `SetWindowRect` / `WindowCommand`.
 5. **Z5, window life (WP5.5/5.7):** minimise, maximise and close mapping,
    transients as non-activating panels placed at their owner's offset.
-6. **Z6, native identity (M6 stub apps):** Dock tile, menu-bar name and
-   Cmd-Tab entry per Windows app.
+6. **Z6, native identity (M6 stub apps):** Dock tile with the Windows app's
+   icon (an owner requirement, "App identity on the Mac side"), menu-bar
+   name and Cmd-Tab entry per Windows app. The interim minimised-tile badge
+   can land with Z5, once `GetIcon` works (agent, or icons served by the
+   mock agent for testing).
 
 ## Edge cases to keep a test list for
 

@@ -64,7 +64,7 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 |----|------|------------|
 | WP3.0 ◐ | VM manager app (owner request 2026-11-23): SwiftUI, Liquid Glass, macOS 26+. Library sidebar, new VM from ISO (automatic or manual install), settings incl. boot order/TPM/firmware wait, media attach, start/pause/restart/shut down/force off, firmware setup, snapshots, UEFI/TPM reset. Display is QEMU's own window until WP3.2. SwiftPM-built bundle (`scripts/build-app.sh`) until WP3.3 needs an Xcode project | Every action also works from `seemlessctl`; `VMManager` tests pass; screenshots of stopped and running states checked. Not yet clicked through by a person |
 | WP3.1 ✅ | Productionise `ui/seemless` patch (protocol in 04), cursor events, resize | Patch applies to pinned QEMU; protocol documented in the patch header |
-| WP3.2 | `DisplayRenderer` + `DesktopWindow` in a minimal app target; keyboard and absolute pointer | Desktop mode usable: type in Notepad, resize window changes guest resolution |
+| WP3.2 ◐ | `DisplayRenderer` + `DesktopWindow` in a minimal app target; keyboard and absolute pointer | Desktop mode usable: type in Notepad, resize window changes guest resolution |
 | WP3.3 | XPC `SeemlessVMHelper`, entitlements, signing for local runs | App launches the VM through the helper |
 | WP3.4 ◐ | Onboarding UI wired to M2 (the New VM sheet already drives `ImageBuilder`; a first-run flow is still to do) | Fresh user account → working desktop mode without Terminal |
 | WP3.5 | Audio out, HiDPI scaling, `seemlessctl screenshot`, first `bench` tests (boot, idle, desktop gfx) | Bench JSON produced; T1 targets checked |
@@ -102,7 +102,8 @@ Mac→Windows, then Windows→Mac · WP6.3 notifications · WP6.4 tray icons in 
 menu bar extra · WP6.5 stub `.app` bundles + file associations ·
 WP6.6 keyboard mapping settings, host IME text input · WP6.7 `OpenOnHost`
 default-browser bridge · WP6.8 per-app host processes for separate Dock tiles
-(optional, large).
+showing each Windows app's icon (large; required by the owner, 2026-11-24,
+see docs/05 "App identity on the Mac side").
 
 ## M7 — Gaming
 
