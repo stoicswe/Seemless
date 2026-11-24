@@ -1,0 +1,27 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Windows Terminal (default terminal) running PowerShell, with its tab dropdown open",
+  "note": "Not captured from a real guest. With Terminal as the default console host, conhost creates a hidden PseudoConsoleWindow per session owned by the Terminal window; Terminal's own window is CASCADIA_HOSTING_WINDOW_CLASS (custom-drawn title bar, real WS_CAPTION).",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x001A0300", "class": "Microsoft.UI.Content.PopupWindowSiteBridge", "style": "0x96000000", "ex_style": "0x00200088", "pid": 9100,
+     "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.23.12811.0_arm64__8wekyb3d8bbwe\\WindowsTerminal.exe",
+     "aumid": "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "owner": "0x001902F0", "rect": {"x": 620, "y": 300, "w": 640, "h": 780},
+     "expect": "popup", "expect_owner": "0x001902F0", "note": "new-tab dropdown"},
+    {"hwnd": "0x001902F0", "class": "CASCADIA_HOSTING_WINDOW_CLASS", "title": "Windows PowerShell", "style": "0x16CF0000", "ex_style": "0x00200100", "pid": 9100,
+     "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.23.12811.0_arm64__8wekyb3d8bbwe\\WindowsTerminal.exe",
+     "aumid": "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "rect": {"x": 600, "y": 220, "w": 1700, "h": 1000}, "expect": "normal"},
+    {"hwnd": "0x001902F8", "class": "PseudoConsoleWindow", "title": "", "style": "0x84000000", "ex_style": "0x08000080", "pid": 9244,
+     "process": "C:\\Windows\\System32\\conhost.exe", "owner": "0x001902F0", "rect": {"x": 0, "y": 0, "w": 0, "h": 0},
+     "expect": "ignore:hidden", "note": "ConPTY's stand-in console window"},
+    {"hwnd": "0x00190308", "class": "TerminalNotificationArea", "style": "0x84000000", "pid": 9100,
+     "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.23.12811.0_arm64__8wekyb3d8bbwe\\WindowsTerminal.exe",
+     "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x0019030C", "class": "Windows.UI.Core.CoreWindow", "title": "", "style": "0x96000000", "ex_style": "0x00200000", "pid": 9100,
+     "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.23.12811.0_arm64__8wekyb3d8bbwe\\WindowsTerminal.exe",
+     "aumid": "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App", "cloaked": 1, "rect": {"x": 0, "y": 0, "w": 1, "h": 1},
+     "expect": "ignore:cloaked", "note": "XAML island's core window, always cloaked"}
+  ]
+}

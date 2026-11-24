@@ -21,7 +21,15 @@ final class AppModel {
     let layout: StorageLayout
     let environment: Environment
     let assets: ImageAssets?
+    /// Guest drivers injected by automatic installs (3D display, network,
+    /// agent channel). Nil: Windows installs with basic graphics only.
+    let drivers: GuestDrivers?
     let host = HostInfo.current
+    /// First run (WP3.4): the welcome flow fills the window while it is set.
+    /// Set when the library is empty at launch (or SEEMLESS_OPEN=welcome);
+    /// cleared when the person goes to the library.
+    var showingWelcome = false
+    private var welcomeDecided = false
 
     private(set) var items: [Item] = []
     private(set) var broken: [String] = []
@@ -70,6 +78,11 @@ final class AppModel {
     init(layout: StorageLayout = AppModel.defaultLayout()) {
         self.layout = layout
         self.assets = ImageAssets.locate()
+        self.drivers = GuestDrivers.locate()
+        if ProcessInfo.processInfo.environment["SEEMLESS_OPEN"]?.hasPrefix("welcome") == true {
+            showingWelcome = true
+            welcomeDecided = true
+        }
         // Developer switch for screenshot checks (no UI automation needed):
         // SEEMLESS_OPEN=new-vm opens the New VM sheet at launch.
         showingNewVM = ProcessInfo.processInfo.environment["SEEMLESS_OPEN"]?.hasPrefix("new-vm") == true
@@ -151,6 +164,10 @@ final class AppModel {
             next.append(Item(config: config, status: await manager.status(of: config.name)))
         }
         if next != items { items = next }
+        if !welcomeDecided {
+            welcomeDecided = true
+            showingWelcome = next.isEmpty && listed.broken.isEmpty
+        }
         if listed.broken != broken { broken = listed.broken }
         if let pending = pendingSelection, items.contains(where: { $0.id == pending }) {
             pendingSelection = nil
@@ -191,13 +208,24 @@ final class AppModel {
         }
     }
 
-    /// `exportDisplay` starts QEMU without its window, exporting the screen
-    /// for screenshots (`-display seemless`) until the app has its own
-    /// display (WP3.2).
-    func start(_ name: String, keys: BootKeys? = nil, paused: Bool = false, exportDisplay: Bool = false) {
-        perform(name, "Couldn’t start “\(name)”") { m in
-            let display: LaunchOptions.Display = exportDisplay ? .exported : .cocoaWindow
-            try await m.start(name, options: LaunchOptions(display: display, bootKeys: keys), resume: !paused)
+    /// Starts the VM with its screen exported (`-display seemless`) and
+    /// opens the app's desktop window (WP3.2). `qemuWindow` uses QEMU's own
+    /// Cocoa window instead (troubleshooting).
+    func start(_ name: String, keys: BootKeys? = nil, paused: Bool = false, qemuWindow: Bool = false) {
+        guard let manager, !busy.contains(name) else { return }
+        busy.insert(name)
+        Task {
+            defer { busy.remove(name) }
+            do {
+                let display: LaunchOptions.Display = qemuWindow ? .cocoaWindow : .exported
+                try await manager.start(name, options: LaunchOptions(display: display, bootKeys: keys), resume: !paused)
+            } catch {
+                self.error = AppError(title: "Couldn’t start “\(name)”", message: String(describing: error))
+                await refresh()
+                return
+            }
+            await refresh()
+            if !qemuWindow { showDisplay(name) }
         }
     }
 
@@ -261,6 +289,7 @@ final class AppModel {
     func resetTPM(_ name: String) { perform(name, "Couldn’t clear the TPM") { try await $0.resetTPM(name) } }
 
     func delete(_ name: String) {
+        UserDefaults.standard.removeObject(forKey: Self.licenceNoticeKey(name))
         perform(name, "Couldn’t delete “\(name)”") { try await $0.delete(name) }
     }
 
@@ -346,7 +375,9 @@ final class AppModel {
             activateQEMUWindow(name)
             return
         }
-        let scale = ProcessInfo.processInfo.environment["SEEMLESS_DISPLAY_SCALE"].flatMap(Double.init).map { CGFloat($0) } ?? 1
+        let env = ProcessInfo.processInfo.environment
+        let scale = env["SEEMLESS_DISPLAY_SCALE"].flatMap(Double.init).map { CGFloat($0) }
+        let files = manager.store.files(for: name)
         desktopStarting.insert(name)
         Task {
             defer { desktopStarting.remove(name) }
@@ -355,23 +386,102 @@ final class AppModel {
             zen?.stop()
             await zen?.closed?.value
             do {
-                let session = try await DesktopSession.start(vm: name, run: remote.record.run, pointsPerPixel: scale)
+                let session = try await DesktopSession.start(vm: name, run: remote.record.run, files: files,
+                                                             scaleOverride: scale)
                 session.onEnd = { ended in
                     guard self.desktopSessions[ended.vm] === ended else { return }
                     self.desktopSessions[ended.vm] = nil
                 }
-                desktopSessions[name] = session
-                session.show()
-                if let text = ProcessInfo.processInfo.environment["SEEMLESS_DISPLAY_TYPE"] {
-                    try? await Task.sleep(for: .seconds(1))
-                    await session.typeForTesting(text.replacingOccurrences(of: "\\n", with: "\n"))
+                session.onNoticeDismissed = { s in
+                    UserDefaults.standard.set(true, forKey: Self.licenceNoticeKey(s.vm))
                 }
+                desktopSessions[name] = session
+                if licenceNoticePending(name) { session.showLicenceNotice() }
+                session.show()
+                await runDisplaySwitches(session, env: env)
             } catch DisplayError.notExported {
                 activateQEMUWindow(name)    // QEMU has its own window
             } catch {
                 self.error = AppError(title: "Couldn’t show the display of “\(name)”", message: String(describing: error))
             }
         }
+    }
+
+    /// Developer switches for checks without UI automation, run once per
+    /// window opened: SEEMLESS_DISPLAY_RESIZE=WxH (points), _FULLSCREEN=1,
+    /// _KEYS=<GuestKeyCombo>, _TYPE=<script> (see `typeForTesting`).
+    private func runDisplaySwitches(_ session: DesktopSession, env: [String: String]) async {
+        let delay = env["SEEMLESS_DISPLAY_DELAY"].flatMap(Double.init) ?? 1
+        if let size = env["SEEMLESS_DISPLAY_RESIZE"] {
+            let p = size.split(separator: "x").compactMap { Double($0) }
+            if p.count == 2 {
+                try? await Task.sleep(for: .seconds(delay))
+                session.resizeForTesting(points: CGSize(width: p[0], height: p[1]))
+            }
+        }
+        if env["SEEMLESS_DISPLAY_FULLSCREEN"] == "1" {
+            try? await Task.sleep(for: .seconds(delay))
+            session.toggleFullScreen()
+        }
+        if let combo = env["SEEMLESS_DISPLAY_KEYS"].flatMap(GuestKeyCombo.init(rawValue:)) {
+            try? await Task.sleep(for: .seconds(delay))
+            session.send(combo)
+        }
+        if let text = env["SEEMLESS_DISPLAY_TYPE"] {
+            try? await Task.sleep(for: .seconds(delay))
+            await session.typeForTesting(text.replacingOccurrences(of: "\\n", with: "\n"))
+        }
+    }
+
+    // MARK: Desktop window menu (Display menu)
+
+    /// The desktop window the Display menu acts on: the key window if it is
+    /// one, else the selected VM's.
+    var activeDesktop: DesktopSession? {
+        if let key = NSApp.keyWindow, let s = desktopSessions.values.first(where: { $0.window === key }) { return s }
+        return selection.flatMap { desktopSessions[$0] }
+    }
+
+    /// Bumped when display preferences change, so menus redraw their checkmarks.
+    private(set) var displayRevision = 0
+
+    func displayPreferences(_ name: String) -> DisplayPreferences {
+        _ = displayRevision
+        if let s = desktopSessions[name] { return s.preferences }
+        guard let manager else { return DisplayPreferences() }
+        return DisplayPreferences.load(manager.store.files(for: name))
+    }
+
+    func setDisplayPreferences(_ name: String, _ prefs: DisplayPreferences) {
+        if let s = desktopSessions[name] {
+            s.update(prefs)
+        } else if let manager {
+            do { try prefs.save(manager.store.files(for: name)) } catch {
+                self.error = AppError(title: "Couldn’t save display settings", message: String(describing: error))
+            }
+        }
+        displayRevision += 1
+    }
+
+    func send(_ combo: GuestKeyCombo) { activeDesktop?.send(combo) }
+
+    func toggleFullScreen() { activeDesktop?.toggleFullScreen() }
+
+    func hasDesktopWindow(_ name: String) -> Bool { desktopSessions[name] != nil }
+
+    // MARK: Licence notice
+
+    nonisolated static func licenceNoticeKey(_ name: String) -> String { "Seemless.licenceNoticeDone.\(name)" }
+
+    /// The VM was installed here without the licence accepted on the Mac
+    /// (always, for installs made by this app), and the person has not yet
+    /// dismissed the notice: Windows will show its licence page.
+    func licenceNoticePending(_ name: String) -> Bool {
+        guard let manager, !UserDefaults.standard.bool(forKey: Self.licenceNoticeKey(name)) else { return false }
+        let manifest = manager.store.files(for: name).directory.appending(path: "image-build.json")
+        guard let data = try? Data(contentsOf: manifest),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return json["licenseAcceptedOnHost"] as? Bool == false
     }
 
     /// Brings QEMU's own display window (`-display cocoa`) to the front.
@@ -428,15 +538,36 @@ final class AppModel {
     }
 
     /// Unattended install (docs/03) in the background; progress in `builds`.
-    func createAutomatic(_ request: ImageBuilder.Request) {
+    /// The guest drivers are injected when found, the screen is exported (no
+    /// QEMU window; "Watch" opens it in a desktop window), and Microsoft's
+    /// licence is never accepted here: Windows shows it at first start for
+    /// the person to accept. `startWhenDone` starts Windows in its desktop
+    /// window after a successful install.
+    func createAutomatic(_ request: ImageBuilder.Request, startWhenDone: Bool = true) {
         guard let manager, let assets else { return }
+        var request = request
+        request.acceptWindowsLicense = false
+        request.display = .exported
+        if request.drivers == nil { request.drivers = drivers?.root }
         let name = request.vm.name
         let progress = BuildProgress()
+        progress.hasDrivers = request.drivers != nil
         builds[name] = progress
         let builder = ImageBuilder(layout: layout, stack: manager.stack, assets: assets)
+        let disk = manager.store.files(for: name).systemDisk
         progress.task = Task {
+            let watch = Task { @MainActor in
+                while !Task.isCancelled {
+                    let v = try? disk.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
+                    progress.diskBytes = Int64(v?.totalFileAllocatedSize ?? 0)
+                    try? await Task.sleep(for: .seconds(2))
+                }
+            }
+            defer { watch.cancel() }
             do {
-                let report = try await builder.build(request) { line in
+                let report = try await builder.build(request, phase: { phase in
+                    Task { @MainActor in progress.phase = phase }
+                }) { line in
                     Task { @MainActor in progress.append(line) }
                 }
                 progress.finish(status: report.result.status, directory: report.resultDirectory, timedOut: report.timedOut)
@@ -444,6 +575,7 @@ final class AppModel {
                 progress.fail(String(describing: error))
             }
             await refresh()
+            if progress.succeeded, startWhenDone { start(name) }
         }
         Task {
             try? await Task.sleep(for: .seconds(2))
@@ -494,7 +626,7 @@ final class AppModel {
         do {
             switch await manager.status(of: name).state {
             case .stopped, .crashed:
-                try await manager.start(name, options: LaunchOptions(display: .cocoaWindow))
+                try await manager.start(name, options: LaunchOptions(display: .exported))
             case .paused:
                 try await manager.resume(name)
             case .starting, .stopping:
@@ -529,6 +661,11 @@ final class BuildProgress {
     private(set) var lines: [String] = []
     private(set) var outcome: Outcome = .running
     var task: Task<Void, Never>?
+    var phase: ImageBuilder.Phase?
+    let started = Date()
+    /// Bytes the system disk takes so far (a sign of life while Windows installs).
+    var diskBytes: Int64 = 0
+    var hasDrivers = false
 
     enum Outcome: Equatable {
         case running

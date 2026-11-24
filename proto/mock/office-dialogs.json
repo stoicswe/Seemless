@@ -1,0 +1,97 @@
+{
+  "build": "seemless-mock-agent dump: Word-style Office app: maximised main window, Font dialog with a nested owned dialog, a ribbon tooltip, hidden helpers",
+  "capabilities": [
+    "core.v1",
+    "system.v1",
+    "windows.v1"
+  ],
+  "steps": [
+    {
+      "send": {
+        "sessionState": {
+          "loggedOn": true,
+          "user": "Seemless"
+        }
+      }
+    },
+    {
+      "send": {
+        "windowSnapshot": {
+          "windows": [
+            {
+              "appKey": "microsoft.office.winword.exe.15",
+              "flags": {
+                "resizable": true
+              },
+              "iconId": "5293388177771509795",
+              "id": "4",
+              "kind": "WINDOW_KIND_NORMAL",
+              "pid": 13300,
+              "rect": {
+                "height": 1504,
+                "width": 2560,
+                "x": 0,
+                "y": 0
+              },
+              "state": "WINDOW_SHOW_STATE_MAXIMIZED",
+              "title": "Document1 - Word"
+            },
+            {
+              "appKey": "microsoft.office.winword.exe.15",
+              "flags": {},
+              "iconId": "5293388177771509795",
+              "id": "3",
+              "kind": "WINDOW_KIND_DIALOG",
+              "ownerId": "4",
+              "pid": 13300,
+              "rect": {
+                "height": 900,
+                "width": 900,
+                "x": 860,
+                "y": 380
+              },
+              "state": "WINDOW_SHOW_STATE_NORMAL",
+              "title": "Font"
+            },
+            {
+              "appKey": "microsoft.office.winword.exe.15",
+              "flags": {},
+              "iconId": "5293388177771509795",
+              "id": "2",
+              "kind": "WINDOW_KIND_DIALOG",
+              "ownerId": "3",
+              "pid": 13300,
+              "rect": {
+                "height": 560,
+                "width": 760,
+                "x": 1000,
+                "y": 520
+              },
+              "state": "WINDOW_SHOW_STATE_NORMAL",
+              "title": "Advanced Typography"
+            },
+            {
+              "appKey": "microsoft.office.winword.exe.15",
+              "flags": {
+                "hasAlpha": true,
+                "topmost": true
+              },
+              "iconId": "5293388177771509795",
+              "id": "1",
+              "kind": "WINDOW_KIND_POPUP",
+              "ownerId": "4",
+              "pid": 13300,
+              "rect": {
+                "height": 180,
+                "width": 520,
+                "x": 300,
+                "y": 260
+              },
+              "state": "WINDOW_SHOW_STATE_NORMAL"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

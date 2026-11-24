@@ -1,18 +1,28 @@
 import AppKit
+import Carbon.HIToolbox
 import Metal
 import QuartzCore
 import SeemlessKit
 
-/// The whole guest screen (scanout 0) in one ordinary Mac window, for a VM
-/// started with an exported display (WP3.2, first part). Pointer and keys
-/// go to the guest over QMP `input-send-event`, as in Zen mode.
+/// Desktop mode (WP3.2): the whole guest screen (scanout 0) in one ordinary
+/// Mac window, for a VM started with an exported display.
 ///
-/// Not yet: resizing the window does not change the guest resolution (it
-/// scales, aspect kept); the guest pointer shape is not drawn (the Mac
-/// pointer is the pointer).
+/// - Keys go through `KeyboardTranslator` (docs/07: Mac or PC style, macOS
+///   shortcuts reserved), the pointer is absolute, both over QMP
+///   `input-send-event` as in Zen mode.
+/// - Resizing the window, entering full screen or moving to a screen with
+///   another scale asks the guest for a matching resolution
+///   (`DisplayClient.requestSize`, with the physical size for its EDID).
+///   A resolution Windows picks itself reshapes the window instead.
+/// - `DisplayPreferences` (per VM) choose standard or Retina scaling and
+///   the keyboard style.
+///
+/// Not yet: the guest pointer shape (viogpu3d draws its own pointer into
+/// the screen, so the Mac pointer is shown on top of it).
 @MainActor
 final class DesktopSession: NSObject, NSWindowDelegate {
     let vm: String
+    private let files: VMFiles
     private let display: DisplayClient
     private let qmp: QMPClient
     private let renderer: ZenRenderer
@@ -21,23 +31,35 @@ final class DesktopSession: NSObject, NSWindowDelegate {
     private let view: DesktopView
     private var tasks: [Task<Void, Never>] = []
     private var observers: [NSObjectProtocol] = []
+    private var keyUpMonitor: Any?
     private enum InputOp { case events([GuestInputEvent]), releaseAll }
     private let sendInput: AsyncStream<InputOp>.Continuation
     private var scrollAccumulator = ScrollAccumulator()
+    private var translator: KeyboardTranslator
+    private(set) var preferences: DisplayPreferences
+    /// SEEMLESS_DISPLAY_SCALE: Mac points per guest pixel, overriding the preference.
+    private let scaleOverride: CGFloat?
+    /// The size last asked of the guest; a scanout of (about) this size is
+    /// our answer, anything else is the guest's own choice.
+    private var lastRequest: (width: Int, height: Int)?
+    private var resizeDebounce: Task<Void, Never>?
+    private var notice: NSTitlebarAccessoryViewController?
     private var stopped = false
     /// Called once when the session ends (window closed or VM stopped); not after `stop()`.
     var onEnd: ((DesktopSession) -> Void)?
+    /// Called when the person dismisses the licence notice.
+    var onNoticeDismissed: ((DesktopSession) -> Void)?
     /// Finishes once `stop()` has closed the QMP connection (handover to Zen).
     private(set) var closed: Task<Void, Never>?
 
     /// Connects to a running VM's exported display. Throws
     /// `DisplayError.notExported` when the VM has QEMU's own window instead.
-    static func start(vm: String, run: RunPaths, pointsPerPixel: CGFloat = 1) async throws -> DesktopSession {
+    static func start(vm: String, run: RunPaths, files: VMFiles, scaleOverride: CGFloat? = nil) async throws -> DesktopSession {
         let display = try DisplayClient(run: run)
         // The size comes with the surface ring QEMU announces on connect; a
         // still screen sends no frame, so do not wait for one (as Zen).
         var geometry: DesktopGeometry?
-        for _ in 0..<50 {
+        for _ in 0..<100 {
             if let f = display.latestFrame() { geometry = DesktopGeometry(guestWidth: f.width, guestHeight: f.height) }
             if geometry == nil, let s = display.scanout() { geometry = DesktopGeometry(guestWidth: s.width, guestHeight: s.height) }
             if geometry != nil { break }
@@ -56,19 +78,26 @@ final class DesktopSession: NSObject, NSWindowDelegate {
             display.close()
             throw error
         }
-        return DesktopSession(vm: vm, display: display, qmp: qmp, renderer: renderer,
-                              geometry: geometry, pointsPerPixel: pointsPerPixel)
+        return DesktopSession(vm: vm, files: files, display: display, qmp: qmp, renderer: renderer,
+                              geometry: geometry, scaleOverride: scaleOverride)
     }
 
-    private init(vm: String, display: DisplayClient, qmp: QMPClient, renderer: ZenRenderer,
-                 geometry: DesktopGeometry, pointsPerPixel: CGFloat) {
+    private init(vm: String, files: VMFiles, display: DisplayClient, qmp: QMPClient, renderer: ZenRenderer,
+                 geometry: DesktopGeometry, scaleOverride: CGFloat?) {
         self.vm = vm
+        self.files = files
         self.display = display
         self.qmp = qmp
         self.renderer = renderer
         self.geometry = geometry
-        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = geometry.initialContentSize(pointsPerPixel: pointsPerPixel,
+        self.scaleOverride = scaleOverride
+        let prefs = DisplayPreferences.load(files)
+        preferences = prefs
+        translator = KeyboardTranslator(style: prefs.keyboard)
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let ppp = scaleOverride.map { 1 / $0 } ?? prefs.scaling.pixelsPerPoint(backingScale: screen?.backingScaleFactor ?? 2)
+        let size = geometry.initialContentSize(pointsPerPixel: 1 / ppp,
                                                fitting: CGSize(width: visible.width * 0.9, height: visible.height * 0.9))
         window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -79,15 +108,14 @@ final class DesktopSession: NSObject, NSWindowDelegate {
         super.init()
         view.input = self
         window.title = vm
-        window.subtitle = "Windows display"
+        window.subtitle = "\(geometry.guestWidth) × \(geometry.guestHeight)"
         window.contentView = view
-        window.contentAspectRatio = geometry.aspectRatio
-        window.contentMinSize = CGSize(width: 320, height: 320 * geometry.aspectRatio.height / geometry.aspectRatio.width)
         window.isReleasedWhenClosed = false
         window.acceptsMouseMovedEvents = true
         window.collectionBehavior = [.managed, .participatesInCycle, .fullScreenPrimary]
         window.tabbingMode = .disallowed
         window.delegate = self
+        applySizeRules()
         window.setFrameAutosaveName("Seemless.Display.\(vm)")
         if window.frame.origin == .zero { window.center() }
         window.initialFirstResponder = view
@@ -131,54 +159,191 @@ final class DesktopSession: NSObject, NSWindowDelegate {
             forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.lostFocus() }
         })
+        // AppKit does not deliver key-ups to the window while Command is
+        // held; catch them here so Cmd shortcuts release in the guest.
+        keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] e in
+            let code = e.keyCode, command = e.modifierFlags.contains(.command), number = e.windowNumber
+            let handled = MainActor.assumeIsolated { () -> Bool in
+                guard let self, command, number == self.window.windowNumber,
+                      self.window.firstResponder === self.view else { return false }
+                self.keyUp(code: code)
+                return true
+            }
+            return handled ? nil : e
+        }
     }
 
     func show() {
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(view)
+        // A window restored to another size asks the guest to match it.
+        requestGuestSize()
     }
 
-    /// Developer switch for checks without UI automation (SEEMLESS_DISPLAY_TYPE):
-    /// types `text` by sending key events through the window, as the keyboard
-    /// would (window → first responder → QMP). Lowercase letters, digits,
-    /// space and newline (Return) only.
-    func typeForTesting(_ text: String) async {
-        let codes: [Character: UInt16] = [
-            "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,
-            "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23,
-            "9": 25, "7": 26, "8": 28, "0": 29, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40,
-            "n": 45, "m": 46, " ": 49, "\n": 36,
-        ]
-        for ch in text {
-            guard let code = codes[ch] else { continue }
-            for type in [NSEvent.EventType.keyDown, .keyUp] {
-                guard let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: 0,
-                                               windowNumber: window.windowNumber, context: nil,
-                                               characters: String(ch), charactersIgnoringModifiers: String(ch),
-                                               isARepeat: false, keyCode: code) else { continue }
-                window.sendEvent(e)
-                try? await Task.sleep(for: .milliseconds(30))
-            }
+    var isFullScreen: Bool { window.styleMask.contains(.fullScreen) }
+
+    func toggleFullScreen() { window.toggleFullScreen(nil) }
+
+    // MARK: Preferences
+
+    /// Guest pixels per Mac point for this window's screen.
+    private var pixelsPerPoint: CGFloat {
+        scaleOverride.map { 1 / $0 } ?? preferences.scaling.pixelsPerPoint(backingScale: window.backingScaleFactor)
+    }
+
+    func update(_ prefs: DisplayPreferences) {
+        guard prefs != preferences else { return }
+        let scalingChanged = prefs.scaling != preferences.scaling
+        preferences = prefs
+        try? prefs.save(files)
+        translator = KeyboardTranslator(style: prefs.keyboard)
+        sendInput.yield(.releaseAll)
+        applySizeRules()
+        if scalingChanged, !isFullScreen {
+            // Same guest resolution, new size on the Mac; then ask again.
+            followGuestSize()
+        }
+        requestGuestSize()
+    }
+
+    /// Free resize when the guest follows the window; otherwise the
+    /// window keeps the guest's aspect ratio and scales it.
+    private func applySizeRules() {
+        let ppp = pixelsPerPoint
+        if preferences.resizeGuest {
+            window.resizeIncrements = CGSize(width: 1, height: 1)
+            window.contentMinSize = CGSize(width: CGFloat(DisplayResize.minimum.width) / ppp,
+                                           height: CGFloat(DisplayResize.minimum.height) / ppp)
+        } else {
+            window.contentAspectRatio = geometry.aspectRatio
+            window.contentMinSize = CGSize(width: 320, height: 320 * geometry.aspectRatio.height / geometry.aspectRatio.width)
         }
     }
 
-    /// The guest changed resolution: new ratio, same width (shrunk to fit the screen).
+    // MARK: Guest resolution
+
+    /// Asks the guest for the resolution that fills the window at the
+    /// current scaling. No-op when it already has it.
+    func requestGuestSize() {
+        guard preferences.resizeGuest, !stopped else { return }
+        let content = view.bounds.size
+        guard content.width > 0, content.height > 0 else { return }
+        let size = DisplayResize.guestSize(forContent: content, pixelsPerPoint: pixelsPerPoint)
+        if size.width == geometry.guestWidth, size.height == geometry.guestHeight { lastRequest = size; return }
+        if let last = lastRequest, last == size { return }
+        var mm = (width: 0, height: 0)
+        if let screen = window.screen,
+           let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+            mm = DisplayResize.physicalSize(forContent: content, screenPoints: screen.frame.size,
+                                            screenMillimetres: CGDisplayScreenSize(id))
+        }
+        do {
+            try display.requestSize(width: size.width, height: size.height, widthMM: mm.width, heightMM: mm.height)
+            lastRequest = size
+            if ProcessInfo.processInfo.environment["SEEMLESS_DISPLAY_LOG"] != nil {
+                NSLog("Seemless display %@: requested %dx%d (%dx%d mm)", vm, size.width, size.height, mm.width, mm.height)
+            }
+        } catch {
+            NSLog("Seemless display %@: size request failed: %@", vm, String(describing: error))
+        }
+    }
+
+    private func scheduleGuestSize() {
+        resizeDebounce?.cancel()
+        resizeDebounce = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.requestGuestSize()
+        }
+    }
+
+    /// Developer switch (SEEMLESS_DISPLAY_RESIZE=WxH): sets the content size
+    /// in points and then does what the end of a live resize does.
+    func resizeForTesting(points: CGSize) {
+        let current = window.contentRect(forFrameRect: window.frame)
+        let frame = window.frameRect(forContentRect: CGRect(x: current.minX, y: current.maxY - points.height,
+                                                            width: points.width, height: points.height))
+        window.setFrame(frame, display: true, animate: false)
+        resizeDebounce?.cancel()
+        requestGuestSize()
+    }
+
+    /// Polled: the guest's resolution changed.
     private func checkDisplaySize() {
         guard let s = display.scanout(), geometry.update(guestWidth: s.width, guestHeight: s.height) else { return }
         view.geometry = geometry
-        window.contentAspectRatio = geometry.aspectRatio
-        window.contentMinSize = CGSize(width: 320, height: 320 * geometry.aspectRatio.height / geometry.aspectRatio.width)
-        guard !window.styleMask.contains(.fullScreen) else { return }
+        window.subtitle = "\(s.width) × \(s.height)"
+        if !preferences.resizeGuest {
+            window.contentAspectRatio = geometry.aspectRatio
+            window.contentMinSize = CGSize(width: 320, height: 320 * geometry.aspectRatio.height / geometry.aspectRatio.width)
+            guard !isFullScreen else { return }
+            let visible = window.screen?.visibleFrame ?? .zero
+            let current = window.contentRect(forFrameRect: window.frame)
+            setContentSize(geometry.contentSize(resizing: current.size, fitting: visible.size))
+            return
+        }
+        // Our own request answered: the window already has this size.
+        if DisplayResize.isAnswer(guestWidth: s.width, guestHeight: s.height, to: lastRequest) { return }
+        // Windows chose a resolution itself (Settings ▸ Display, a game):
+        // the window follows it, and this size counts as asked for.
+        lastRequest = (s.width, s.height)
+        guard !isFullScreen else { return }
+        followGuestSize()
+    }
+
+    /// Window content = the guest screen at the current scaling, shrunk to fit.
+    private func followGuestSize() {
+        let visible = window.screen?.visibleFrame ?? .zero
+        setContentSize(geometry.initialContentSize(pointsPerPixel: 1 / pixelsPerPoint, fitting: visible.size))
+    }
+
+    /// Keeps the top-left corner where it is.
+    private func setContentSize(_ size: CGSize) {
         let visible = window.screen?.visibleFrame ?? .zero
         let current = window.contentRect(forFrameRect: window.frame)
-        let size = geometry.contentSize(resizing: current.size, fitting: visible.size)
-        // Keep the top-left corner where it is.
         var frame = window.frameRect(forContentRect: CGRect(x: current.minX, y: current.maxY - size.height,
                                                             width: size.width, height: size.height))
         if !visible.isEmpty { frame.origin.y = max(frame.origin.y, visible.minY) }
         window.setFrame(frame, display: true, animate: false)
     }
+
+    // MARK: Licence notice
+
+    /// A bar under the title: the person reads and accepts Microsoft's
+    /// licence in Windows; Seemless never accepts it for them.
+    func showLicenceNotice() {
+        guard notice == nil else { return }
+        let label = NSTextField(wrappingLabelWithString:
+            "Windows will show Microsoft’s licence terms. Read them and accept them yourself in this window: Seemless never accepts them for you. After that, Windows signs in to your account.")
+        label.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        label.textColor = .secondaryLabelColor
+        let icon = NSImageView(image: NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)!)
+        let ok = NSButton(title: "OK", target: self, action: #selector(dismissLicenceNotice))
+        ok.controlSize = .small
+        ok.bezelStyle = .push
+        let stack = NSStackView(views: [icon, label, ok])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        stack.frame = CGRect(x: 0, y: 0, width: 600, height: 44)
+        let vc = NSTitlebarAccessoryViewController()
+        vc.view = stack
+        vc.layoutAttribute = .bottom
+        window.addTitlebarAccessoryViewController(vc)
+        notice = vc
+    }
+
+    @objc private func dismissLicenceNotice() {
+        guard let notice, let i = window.titlebarAccessoryViewControllers.firstIndex(of: notice) else { return }
+        window.removeTitlebarAccessoryViewController(at: i)
+        self.notice = nil
+        onNoticeDismissed?(self)
+    }
+
+    var hasLicenceNotice: Bool { notice != nil }
 
     // MARK: Window
 
@@ -187,6 +352,20 @@ final class DesktopSession: NSObject, NSWindowDelegate {
     func windowDidChangeOcclusionState(_ notification: Notification) {
         if window.occlusionState.contains(.visible) { view.render(force: true) }
     }
+    func windowDidResize(_ notification: Notification) {
+        guard !window.inLiveResize else { return }
+        scheduleGuestSize()            // zoom button, tiling, programmatic
+    }
+    func windowDidEndLiveResize(_ notification: Notification) {
+        resizeDebounce?.cancel()
+        requestGuestSize()
+    }
+    func windowDidEnterFullScreen(_ notification: Notification) { requestGuestSize() }
+    func windowDidExitFullScreen(_ notification: Notification) { requestGuestSize() }
+    func windowDidChangeBackingProperties(_ notification: Notification) {
+        applySizeRules()
+        requestGuestSize()
+    }
 
     /// Closes the window and the connections; the VM keeps running. Safe to call twice.
     func stop() {
@@ -194,6 +373,9 @@ final class DesktopSession: NSObject, NSWindowDelegate {
         stopped = true
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers.removeAll()
+        if let m = keyUpMonitor { NSEvent.removeMonitor(m) }
+        keyUpMonitor = nil
+        resizeDebounce?.cancel()
         window.delegate = nil
         window.close()
         sendInput.yield(.releaseAll)
@@ -238,19 +420,131 @@ final class DesktopSession: NSObject, NSWindowDelegate {
         enqueue(GuestInputEvent.wheel(clicksY: c.y, clicksX: c.x))
     }
 
-    func key(code: UInt16, down: Bool) {
-        guard let q = GuestKeyMap.qcode(forKeyCode: Int(code)) else { return }
-        enqueue([.key(qcode: q, down: down)])
-    }
+    func keyDown(code: UInt16) { enqueue(translator.keyDown(keyCode: Int(code))) }
+    func keyUp(code: UInt16) { enqueue(translator.keyUp(keyCode: Int(code))) }
 
     func modifiers(code: UInt16, flags: NSEvent.ModifierFlags) {
-        enqueue(GuestKeyMap.modifierEvents(keyCode: Int(code), flags: flags.rawValue))
+        enqueue(translator.flagsChanged(keyCode: Int(code), flags: flags.rawValue))
+    }
+
+    /// Cmd shortcuts: macOS's own (Cmd-Q, Cmd-H, …) go to the menus; the
+    /// rest go to the guest. True when the guest took it.
+    func keyEquivalent(_ e: NSEvent) -> Bool {
+        if KeyboardTranslator.isReservedForMac(keyCode: Int(e.keyCode), flags: e.modifierFlags.rawValue) {
+            translator.noteReservedShortcut()
+            return false
+        }
+        if !e.isARepeat { keyDown(code: e.keyCode) }
+        return true
+    }
+
+    func send(_ combo: GuestKeyCombo) {
+        sendInput.yield(.releaseAll)
+        translator.reset()
+        enqueue(combo.events)
     }
 
     /// Keys held in the guest are released when the Mac focus leaves, so none sticks.
     func lostFocus() {
         guard !stopped else { return }
+        translator.reset()
         sendInput.yield(.releaseAll)
+    }
+
+    // MARK: Developer switches (checks without UI automation)
+
+    /// SEEMLESS_DISPLAY_TYPE: types `script` by sending key events through
+    /// the window as the keyboard would (window → first responder or key
+    /// equivalent → translator → QMP). Plain characters: lowercase letters,
+    /// digits, space, `.`, `-`, newline. Braces hold keys and chords:
+    /// `{cmd}` (a lone Command tap), `{cmd+a}`, `{shift+h}`, `{ret}`,
+    /// `{esc}`, `{tab}`, `{bksp}`, `{wait}` (one second).
+    func typeForTesting(_ script: String) async {
+        var tokens: [String] = []
+        var i = script.startIndex
+        while i < script.endIndex {
+            if script[i] == "{", let close = script[i...].firstIndex(of: "}") {
+                tokens.append(String(script[script.index(after: i)..<close]))
+                i = script.index(after: close)
+            } else {
+                tokens.append(String(script[i]))
+                i = script.index(after: i)
+            }
+        }
+        for t in tokens {
+            if t == "wait" { try? await Task.sleep(for: .seconds(1)); continue }
+            if t.count == 1 || ["ret", "esc", "tab", "bksp"].contains(t) {
+                await press(t, modifiers: [])
+                continue
+            }
+            let parts = t.split(separator: "+").map(String.init)
+            var mods: [String] = Array(parts.dropLast())
+            var last = parts.last ?? ""
+            if parts.count == 1, ["cmd", "shift", "ctrl", "opt"].contains(last) { mods = [last]; last = "" }
+            await chord(mods, key: last)
+        }
+    }
+
+    private static let testKeyCodes: [String: Int] = [
+        "a": kVK_ANSI_A, "s": kVK_ANSI_S, "d": kVK_ANSI_D, "f": kVK_ANSI_F, "h": kVK_ANSI_H, "g": kVK_ANSI_G,
+        "z": kVK_ANSI_Z, "x": kVK_ANSI_X, "c": kVK_ANSI_C, "v": kVK_ANSI_V, "b": kVK_ANSI_B, "q": kVK_ANSI_Q,
+        "w": kVK_ANSI_W, "e": kVK_ANSI_E, "r": kVK_ANSI_R, "y": kVK_ANSI_Y, "t": kVK_ANSI_T, "o": kVK_ANSI_O,
+        "u": kVK_ANSI_U, "i": kVK_ANSI_I, "p": kVK_ANSI_P, "l": kVK_ANSI_L, "j": kVK_ANSI_J, "k": kVK_ANSI_K,
+        "n": kVK_ANSI_N, "m": kVK_ANSI_M,
+        "1": kVK_ANSI_1, "2": kVK_ANSI_2, "3": kVK_ANSI_3, "4": kVK_ANSI_4, "5": kVK_ANSI_5, "6": kVK_ANSI_6,
+        "7": kVK_ANSI_7, "8": kVK_ANSI_8, "9": kVK_ANSI_9, "0": kVK_ANSI_0,
+        " ": kVK_Space, "\n": kVK_Return, "ret": kVK_Return, "esc": kVK_Escape, "tab": kVK_Tab,
+        "bksp": kVK_Delete, ".": kVK_ANSI_Period, "-": kVK_ANSI_Minus,
+        "left": kVK_LeftArrow, "right": kVK_RightArrow, "up": kVK_UpArrow, "down": kVK_DownArrow,
+    ]
+
+    private static let testModifiers: [String: (code: Int, flags: NSEvent.ModifierFlags, device: UInt)] = [
+        "cmd": (kVK_Command, .command, 0x0008), "shift": (kVK_Shift, .shift, 0x0002),
+        "ctrl": (kVK_Control, .control, 0x0001), "opt": (kVK_Option, .option, 0x0020),
+    ]
+
+    private func chord(_ mods: [String], key: String) async {
+        var flags: NSEvent.ModifierFlags = []
+        var device: UInt = 0
+        for m in mods {
+            guard let mod = Self.testModifiers[m] else { continue }
+            flags.insert(mod.flags); device |= mod.device
+            sendFlags(code: mod.code, flags: NSEvent.ModifierFlags(rawValue: flags.rawValue | device))
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+        if !key.isEmpty { await press(key, modifiers: NSEvent.ModifierFlags(rawValue: flags.rawValue | device)) }
+        for m in mods.reversed() {
+            guard let mod = Self.testModifiers[m] else { continue }
+            flags.remove(mod.flags); device &= ~mod.device
+            sendFlags(code: mod.code, flags: NSEvent.ModifierFlags(rawValue: flags.rawValue | device))
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+    }
+
+    private func sendFlags(code: Int, flags: NSEvent.ModifierFlags) {
+        guard let cg = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(code), keyDown: true) else { return }
+        cg.type = .flagsChanged
+        cg.flags = CGEventFlags(rawValue: UInt64(flags.rawValue))
+        guard let e = NSEvent(cgEvent: cg) else { return }
+        window.sendEvent(e)
+    }
+
+    private func press(_ key: String, modifiers: NSEvent.ModifierFlags) async {
+        guard let code = Self.testKeyCodes[key] else { return }
+        let ch = key.count == 1 ? key : ""
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            guard let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                                           windowNumber: window.windowNumber, context: nil,
+                                           characters: ch, charactersIgnoringModifiers: ch,
+                                           isARepeat: false, keyCode: UInt16(code)) else { continue }
+            // As AppKit does: Command keys are offered as key equivalents first.
+            if type == .keyDown, modifiers.contains(.command) {
+                if !window.performKeyEquivalent(with: e) { window.sendEvent(e) }
+            } else {
+                window.sendEvent(e)
+            }
+            try? await Task.sleep(for: .milliseconds(30))
+        }
     }
 }
 
@@ -352,8 +646,13 @@ final class DesktopView: NSView {
         input?.scroll(deltaX: e.scrollingDeltaX, deltaY: e.scrollingDeltaY, precise: e.hasPreciseScrollingDeltas,
                       newGesture: e.phase == .began || e.phase == .mayBegin)
     }
-    override func keyDown(with e: NSEvent) { if !e.isARepeat { input?.key(code: e.keyCode, down: true) } }
-    override func keyUp(with e: NSEvent) { input?.key(code: e.keyCode, down: false) }
+    override func keyDown(with e: NSEvent) { if !e.isARepeat { input?.keyDown(code: e.keyCode) } }
+    override func keyUp(with e: NSEvent) { input?.keyUp(code: e.keyCode) }
     override func flagsChanged(with e: NSEvent) { input?.modifiers(code: e.keyCode, flags: e.modifierFlags) }
+    override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        guard e.type == .keyDown, e.modifierFlags.contains(.command), window?.firstResponder === self,
+              let input else { return super.performKeyEquivalent(with: e) }
+        return input.keyEquivalent(e) || super.performKeyEquivalent(with: e)
+    }
     override func resignFirstResponder() -> Bool { input?.lostFocus(); return true }
 }

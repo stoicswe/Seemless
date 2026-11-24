@@ -287,23 +287,22 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
     screenshot shows the 3D desktop where QMP `screendump` is black
     (`build/s3/shots/desktop-3d.png`, seen), and resize to 1280×800 works.
   - Agents can now see the 3D desktop.
-- **S9 Steam games in the VM** (2026-11-24, own session, notes only): the
-  VM is feasible as a per-game **pseudo-prefix** that FineWine's Steam tool
-  could pick instead of a Wine prefix.
-  - **Shape A:** Windows Steam runs in the VM, using a shared library
-    folder. Its risk is one Steam account "playing" in two places.
-  - **Shape B:** a cross-VM `lsteamclient` bridge. Roughly 1 month to a
-    proof of concept and 3–6 months to match FineWine's bridge; it belongs
-    in FineWine, which holds the Valve-licensed code.
-  - **Anti-cheat** limits which games can run there, not whether to build
-    it.
-  - Phase 0 is four experiments, each needing the owner's OK:
-    - E1: dump what Mac Steam passes to a tool;
-    - E2: two clients on one account;
-    - E3: Windows Steam adopting a shared library (needs S7);
-    - E4: Windows Steam on ARM64 build 26300.
-  - Note: `docs/spikes/S9-steam-in-vm.md`. Nothing run, no Steam settings
-    changed, FineWine untouched.
+- **S9 Steam games in the VM** (2026-11-24, own session): the VM is
+  feasible as a **pseudo-prefix** that FineWine's Steam tool could pick
+  instead of a Wine prefix.
+  - **Chosen (owner):** shape B, a cross-VM `lsteamclient` bridge to Mac
+    Steam, with no Windows Steam in the guest. The goal is a proof of
+    concept and anti-cheat does not matter. Roughly 1 month to a PoC and
+    3–6 months to match FineWine's bridge; the bridge halves belong in
+    FineWine, which holds the Valve-licensed code.
+  - **E1 done** (Portal 2): Steam passes `waitforexitandrun <exe>`;
+    "playing" lasts as long as the tool's process; Stop sends SIGTERM.
+  - **E5/E6 not run yet:** a throwaway build in `build/s9/root` was stopped
+    part-way and deleted (owner: too many VMs at once). They will run on
+    WP4.2's agent VM. Scripts are in `spikes/S9-steam/`, and the test USB
+    image (redists + REKA, never committed) is `build/s9/s9-usb.img`.
+  - E2–E4 are dropped: each needs Windows Steam in the guest.
+  - Note: `docs/spikes/S9-steam-in-vm.md`. FineWine untouched.
 - **S6 fast resume** (2026-11-23, S2's session, owner-requested): suspend
   to disk will use **guest hibernate**, not QEMU state.
   - With the 3D driver loaded, `savevm` and migrate-to-file are blocked:
@@ -329,41 +328,126 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
     `neptune`, pinned as a candidate) plus S8's macOS patch.
   - Untested risk: D3D12 present and interop when DXGI and D3D11 come from
     DXMT but D3D12 comes from vkd3d-proton.
-  - A message to UTM's maintainers is drafted in the note, for the owner to
-    send.
+  - A message to UTM's maintainers is drafted in the note. **Owner
+    (2026-11-24): not sending it.** The draft stays in the note, for reference.
   - Note: `docs/spikes/WP7b0-d3d12-trigger-review.md`.
+- **WP5.1 guest `windows-model`** (2026-11-24, own session):
+  - **What it does:** classifies top-level windows (normal, dialog, menu,
+    tooltip, popup, splash or tool, or ignored and why) and turns them into
+    the protocol's `Window`, `WindowSnapshot/Added/Updated/Removed` and
+    `FullscreenState` messages, ready for WP4.2 to send. No proto change
+    was needed.
+  - **Pieces:**
+    - `rules.toml` holds the per-class and per-app rules. Defaults are
+      compiled in; an `/agent/rules.toml` override is read first.
+    - The `WindowSource` trait stands in for the Win32 side.
+    - Dump capture is `Dump::capture`.
+    - `examples/dump-to-mock` writes mock-agent scripts;
+      `proto/mock/office-dialogs.json` was made with it.
+  - **Decisions** are in docs/05, "Classification as built":
+    - an owned window's owner is its nearest mirrored ancestor;
+    - a main window owned by a hidden application window is normal;
+    - a splash is a frameless popup that is its process's only window;
+    - an owned window takes its owner's `app_key`, so Word's dialogs group
+      with Word.
+  - **Acceptance:** 10 app dumps (69 windows) classify as expected. 33
+    Rust tests in the crate.
+  - **Cross-check:** every dump's snapshot also loads into the host's
+    `ZenWindowModel` with 0 rejected, using a throwaway checker outside the
+    repo.
+  - **The dumps are synthetic**, written by hand (no Windows VM). Replace
+    them with captures when the agent runs (`tests/data/README.md`).
+  - **Not built:** the Win32 enumerator and event hook. They need the
+    Windows target, and they go with the session agent.
+- **Preview 1 P2: first run and desktop mode** (2026-11-24, own session):
+  - **First run (WP3.4):** an empty library opens a welcome flow
+    (`app/Seemless/WelcomeView.swift`): requirements (`FirstRun`, kit), the
+    user's own ISO with Microsoft's download link, a profile, then the
+    automatic install with staged progress (`ImageBuilder.Phase`) and the
+    guest drivers (`GuestDrivers.locate`). Windows then starts in its
+    desktop window with a bar saying the person accepts Microsoft's licence
+    there. The app never accepts it: the New VM sheet's "accept now" toggle
+    is gone.
+  - **Desktop mode (WP3.2):** `KeyboardTranslator` (Mac style default: ⌘
+    shortcuts → Ctrl, ⌘ alone → Start; PC style; macOS shortcuts reserved),
+    resize/full screen → guest resolution over `SET_SIZE`, Display menu
+    (Send Keys incl. Ctrl-Alt-Delete, full screen, scaling, keyboard
+    style). Start now always uses the exported display; QEMU's window is
+    "Start in QEMU Window".
+  - **WP3.5 part:** audio was already `usb-audio` on CoreAudio, always on.
+    Scaling is Standard (default) or Retina per VM; Windows does not pick
+    200 % by itself, so Retina waits for the agent's DPI (WP4.4).
+  - **Verified** on VM "Windows 11" (`build/p2/root`), built by the app's
+    flow (`FIRSTBOOT_OK`, 3D driver): licence accepted by the owner in the
+    window; Notepad typing with ⌘A; 1280×720 window → guest 1280×720;
+    Retina full screen → 3024×1898; Ctrl-Alt-Delete; Windows' default
+    playback device is the USB audio device, and the owner heard the speaker
+    test on the Mac (audio pass). Results:
+    `docs/testing/desktop-mode.md`.
+  - **Not verified by a person:** clicking through the welcome flow (run by
+    developer switches), dragging to resize, the menus, the PC style. The
+    guest pointer shape is not drawn (the Mac pointer is shown).
+  - 24 new Swift tests; `scripts/check.sh` passes (192 Swift tests).
 - FAT image operations (`hdiutil`/`diskutil`) are serialised: in parallel
   they made tests 4-10x slower.
 - 163 Swift tests and 9 Rust tests, all passing (`scripts/check.sh`, 2026-11-24).
 - Upstream research: UTM 5.0's Neptune/Triton DirectX stack and Tiny11
   Builder 0.2.0 state (see `11-references.md`).
 
+- **P1 self-contained, signed app** (2026-11-24, WP8.1/8.2/8.5, partial):
+  - `scripts/package-release.sh` builds `build/release/Seemless.app` (QEMU,
+    qemu-img, swtpm, render server and `seemlessctl` in `Helpers/`, 34
+    dylibs in `Frameworks/` with `@rpath` names, firmware in
+    `Resources/qemu`, image assets, licences), a dmg and a zip. An `otool`
+    audit (`scripts/release/audit-bundle.sh`) fails the build on any path
+    outside the bundle. Signing is inside-out with the hardened runtime;
+    QEMU gets only `com.apple.security.hypervisor` (no JIT needed).
+    Notarization runs when the owner sets `SEEMLESS_SIGN_IDENTITY` and
+    `SEEMLESS_NOTARY_PROFILE`. Runbook and the owner's one-time setup:
+    `docs/release.md`.
+  - `HostStack` has an app-bundle layout. `locate()` prefers the
+    enclosing bundle over `build/prefix`. `ImageAssets` does the same.
+  - Licences: notices generated from `THIRD_PARTY.md` (new "Shipped in
+    Seemless.app" table) and Homebrew's metadata; `source-archive.sh`
+    builds the source offer from the pinned SHAs, submodules, Homebrew
+    tarballs and `patches/`.
+  - **Verified:** the bundle copied out of the repository ran under
+    `sandbox-exec` with `build/prefix` and `/opt/homebrew` unreadable.
+    Its own `seemlessctl` booted two firmware VMs to the UEFI shell
+    (screendumps checked). ANGLE, virglrenderer and SDL3 loaded from
+    `Contents/Frameworks`, and nothing was mapped from the prefix or
+    Homebrew. The app found the bundled stack (window screenshot). Nobody
+    clicked Start in the release app.
+  - **Not done:** releasable on macOS 26: 14 Homebrew dylibs need macOS 27
+    (docs/10 L1; the audit fails without `--allow-newer-minos`). Developer
+    ID signing and notarization have not run (they need the owner's
+    identity). Licence findings L1–L6 in docs/10 need the owner.
+
 ## Not done
 
-- **Blocker: Windows VMs with the 3D driver stop booting.** Both end in
-  Startup Repair ("couldn't be repaired"):
-  - `admfix` broke after many hard resets, and its snapshots land in repair
-    too.
-  - `wp31` broke after a **clean shutdown** (S3, 2026-11-24). The next
-    start hung at the firmware screen for 9+ minutes: only vCPU0 running,
-    at a fixed PC, and the renderer never started. One forced power-off
-    later, it was in Startup Repair. Details at the end of
-    `docs/spikes/S3-display-export.md`.
-
-  So hard resets alone don't explain it. Suspects: Windows Fast Startup
-  (hybrid shutdown, which writes a hibernation image) combined with the 3D
-  driver, or something in the 3D driver's boot path. Not investigated.
-  Every test VM is at risk until it's understood: Fire Strike, the S6
-  hibernate check and Z1's Notepad acceptance all need a Windows VM that
-  boots. Until then, keep a disk overlay or snapshot before each test.
-- Hibernate resume with the 3D driver loaded is not validated (S6). It
-  needs a fresh VM and a way to see or drive the 3D desktop: the S3
-  backend productionised (WP3.1) or the M4 agent.
-- VMs built before the account fix (the owner's Lean VM, S2's `s2`) still
-  have a non-admin account and must be rebuilt.
-- No Fire Strike score yet: 3DMark is not installed (the owner provides it).
-- The reset fix is not upstream yet: `patches/virglrenderer/0001` should go
-  to utmapp/virglrenderer. A guest-initiated restart (Start ▸ Restart) was
+- **Resolved: Windows VMs with the 3D driver stopped booting** (`admfix`,
+  `wp31`). Cause found in S6b (`docs/spikes/S6b-hibernate-resume-crash.md`):
+  Fast Startup turns every shutdown into a hibernate. The resume with
+  viogpu3d faults on the virtio-gpu blob window, Windows' handler reads
+  `ERRIDR_EL1`, and QEMU's HVF backend has no handler for it, so the guest
+  bugchecks (0x1E). Sometimes the next boot hangs in firmware, and after a
+  forced power-off it goes to Startup Repair.
+  - **Fix:** `firstboot.cmd` sets `HiberbootEnabled = 0` and the build fails
+    if it isn't set.
+  - **Confirmed:** WP7.5's fresh VM `wp75` shut down and restarted cleanly
+    three times (2026-11-24).
+  - **Still broken:** guest hibernate with viogpu3d, which was S6's chosen
+    suspend method, so suspend stays out of the preview.
+- **All VMs deleted** (owner, 2026-11-24): the app's "Windows 11" (Lean),
+  `s2`, `fw`, `wp31`, `zen1`, and the `bootfix` VMs `a1`, `n1`, `r1`, about
+  52 GB. VMs are re-created as new work needs them, so the non-admin
+  account bug in older VMs is gone with them.
+- **Checked off by the owner** (2026-11-24), not run: Fire Strike, S6's
+  hibernate-resume check, the Zen Z1 Notepad acceptance, and the postponed
+  Zen bug-testing round. They are no longer tracked as next steps.
+- **The reset fix stays local** (owner, 2026-11-24): `patches/virglrenderer/0001`
+  is not sent upstream. Patches the project needs are kept in `patches/`
+  for this project only. A guest-initiated restart (Start ▸ Restart) was
   not separately tested; `vm restart` hits the same `virtio_gpu_reset`
   path.
 - **Agents can't see the 3D desktop:** `vm screendump` returns black once
@@ -395,36 +479,47 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
 
 ## Next
 
-1. Send `patches/virglrenderer/0001` upstream (owner posts the PR).
-2. **Find why 3D-driver VMs stop booting** (blocker above). Try a fresh VM
-   with Fast Startup off (`powercfg /h off`), and collect the
-   `SrtTrail.txt` / setup logs from the broken disks. Fresh VM with the
-   driver built in: `seemlessctl image build … --drivers build/s3/drivers`
-   (about 7 minutes; the owner accepts the licence at first start). Then Fire Strike on
-   a VM that keeps booting. The owner provides 3DMark,
-   and `seemlessctl vm open` can send its installer in.
-3. Validate S6's hibernate resume, and run the Zen Z1 Notepad acceptance,
-   on that VM.
-4. Zen Z2: real window rectangles. It needs WP4.2 (agent) and WP5.1
-   (windows-model).
-5. WP7.5, D3D12 (host only; the reset fix is in):
-   - build vkd3d-proton natively for macOS from `osy/vkd3d-proton`
-     `neptune` plus S8's patch, on **MoltenVK** (owner's D3a choice,
-     2026-11-23). Rung 1 needs S8's four MoltenVK device patches (H1–H4:
-     two in vkd3d-proton, plus `robustBufferAccess2` and `nullDescriptor`
-     in MoltenVK);
-   - point `NPT_D3D12_LIBRARY_PATH` at it;
-   - in the guest, get `D3D12CreateDevice` working, then the rest of the
-     docs/04 ladder.
-6. WP4.2: the Rust service and session agent over vioserial; acceptance
+Owner's order (2026-11-24): WP4.2, WP5.1 and WP7.5 run now, in parallel
+sessions, alongside S9's experiments. The Zen steps after the agent follow.
+Open questions come last.
+
+1. WP4.2: the Rust service and session agent over vioserial; acceptance
    `seemlessctl agent info` against a real VM. It needs the Windows target
    and cargo-xwin, whose first build asks the owner to accept Microsoft's
    CRT/SDK licence.
-7. WP5.1 and the host `WindowModel`: both can be driven by the mock agent now.
-8. S9 phase 0 (the owner's call): experiments E1–E4. E1 and E2 use the
-   owner's Steam account; E3 waits for S7.
-9. Owner: rebuild the Lean VM (the old one has the non-admin account), and
-   send the WP7b.0 message to UTM if wanted.
+2. WP5.1 (guest `windows-model`) and the host `WindowModel`: both can be
+   driven by the mock agent now.
+3. WP7.5, D3D12 (◐ 2026-11-24; note `docs/spikes/WP7.5-d3d12-host-backend.md`):
+   - **Done:** vkd3d-proton (`osy` `neptune`) and MoltenVK v1.4.2 built
+     from source by `build-deps.sh moltenvk vkd3d`, with H1–H4 patched in
+     `patches/vkd3d-proton-npt/` and `patches/moltenvk/` (no capability
+     bypass); the launcher sets `NPT_D3D12_LIBRARY_PATH` for DXMT.
+   - **Ladder:** host rungs 1–3 pass (FL 11_0, SM 6.0). In a fresh guest
+     (`build/wp75/root`), rungs 1–3 pass with DXBC; rung 3's frame equals
+     the host reference byte for byte.
+   - **Open:** DXIL in the guest. Triton advertises SM 5.1 for a DXMT
+     capset, and with `CAP_DXIL` forced it claims 12_1 and device creation
+     fails: needs a Triton change (WP4.6) or more host features. Then
+     shared textures/heap import for vkd3d-proton (rung 4), FL 12_0 / SM 6.x
+     work, and pointing Venus at the same MoltenVK.
+4. S9 phase 0, in parallel: experiments E5 (virtio-serial round trip on a
+   third port) and E6 (VC++ and DirectX redists, plus a D3D11 x64 game, on
+   build 26300). E2–E4 stay dropped: each installs Windows Steam in the
+   guest, which the owner ruled out (S9 decision 1).
+5. After WP4.2 (Zen): Z2 real window rectangles; Z3 input, focus, cursor
+   shapes and the clipboard (Z3b, WP4.5); Z4 tier 1 atlas (S5, WP5.4); Z5
+   window life and transients (with the minimised Dock tile's app-icon
+   badge); Z6 per-app Dock icon, name and Cmd-Tab entry (WP6.8). Then M6
+   and M7.
+6. **Goal set by the owner (2026-11-24): Preview 1, a public GitHub release**
+   with desktop mode and an experimental Zen mode. Its scope, order and
+   owner gates are in `docs/09-roadmap.md` ("Preview 1"). From now on,
+   that list decides what runs next.
+7. **Last, but before Preview 1 ships:** the open questions in
+   `10-risks-licensing.md` (owner, 2026-11-24). Q10 is answered: MIT for
+   our own code, upstream projects keep their own licences, and no ISO
+   distribution. Still blocking a public release: Q11 (name), Q12 (agent
+   CRT redistribution) and Q13 (how users get the guest drivers).
 
 ## Learned
 
@@ -475,7 +570,12 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
 | 2026-11-24 | Zen Z1 | Chrome-less per-window crop windows + QMP input, mock-agent driven; crop verified on fw; app layout refined |
 | 2026-11-24 | WP3.1 | ui/seemless display backend patch + SeemlessKit receiver + `seemlessctl screenshot`; 3D desktop visible to agents (VM wp31) |
 | 2026-11-24 | S9 | Steam-in-VM feasibility: pseudo-prefix design, shape A (Steam in VM) / B (cross-VM lsteamclient); experiments E1–E4 await owner |
+| 2026-11-24 | S9 | Shape B chosen, E2–E4 dropped; E1 done (argv, lifetime = playing, Stop = SIGTERM); E5/E6 build stopped and deleted at owner's request, to run on WP4.2's VM |
 | 2026-11-23 | S6 | Suspend = guest hibernate (QEMU snapshot/migrate blocked by virgl, nvme, usb-audio); hibernate not yet validated; admfix boot-damaged by repeated hard resets |
 | 2026-11-23 | WP7b.0 | Trigger not fired: upstream Triton ships a D3D12 UMD; D3D12 work is host-only (WP7.5, vkd3d-proton dylib) |
 | 2026-11-23 | S2 (partial) | Renderer runs (DXMT D3D11, FL 11_1, DWM accelerated); D12 confirmed in guest; QEMU aborts on virtio-gpu reset (eglDestroyImageKHR unresolved) |
 | 2026-11-23 | WP4.1 | Protocol, Swift/Rust codegen without protoc, framing, handshake, AgentClient, mock agent; 22 Swift + 9 Rust tests |
+| 2026-11-24 | WP5.1 | `windows-model`: classification, rules.toml, tracker emitting protocol messages; 10 synthetic app dumps classify as expected (33 tests); Win32 enumerator not built |
+| 2026-11-24 | WP7.5 (◐) | vkd3d-proton + MoltenVK built from source with H1–H4 patches; `NPT_D3D12_LIBRARY_PATH` wired; ladder rungs 1–3 pass on host and in a guest with DXBC (rung 3 = host reference); guest DXIL blocked by Triton's SM 5.1 caps |
+| 2026-11-24 | P2 (WP3.4, WP3.2, WP3.5 part) | First-run flow builds and starts Windows with the 3D driver (licence accepted by the owner in the window); Notepad typing, resize → guest resolution, full screen, Ctrl-Alt-Delete verified by screenshots; audio device present in Windows and heard by the owner |
+| 2026-11-24 | P1 (◐) | Release packaging: self-contained app, otool audit, hardened-runtime signing (ad-hoc here), notices, source offer; relocated app boots firmware with no build/prefix or Homebrew; blocked for macOS 26 by Homebrew libraries built for 27 (docs/10 L1) |

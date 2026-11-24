@@ -9,3 +9,10 @@ publish = false
 [[bin]]
 name = "seemless-agent"
 path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+proto = { path = "../proto" }
+transport = { path = "../transport" }

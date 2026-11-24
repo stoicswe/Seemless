@@ -1,0 +1,131 @@
+Seemless WP7.5: Win32 event HANDLEs on macOS are directx-native events.
+
+macOS has no eventfd. Neptune (virglrenderer npt_event.c) hands the D3D12
+library event handles created by the D3D11 umbrella's embedder API
+(dxmt_event_create), i.e. directx-native dxn_event boxes. Signal, wait,
+create, duplicate and close them with our statically linked copy of
+directx-native. That is only safe because DXMT and this fork pin the same
+directx-native revision (7258be1); scripts/build-deps.sh checks that.
+Licence: LGPL-2.1 (vkd3d-proton).
+
+diff --git a/include/private/vkd3d_native_sync_handle.h b/include/private/vkd3d_native_sync_handle.h
+index 1e5eb62..7049495 100644
+--- a/include/private/vkd3d_native_sync_handle.h
++++ b/include/private/vkd3d_native_sync_handle.h
+@@ -28,6 +28,14 @@ enum vkd3d_native_sync_handle_type
+ 
+ #ifdef _WIN32
+ typedef struct { HANDLE handle; enum vkd3d_native_sync_handle_type type; } vkd3d_native_sync_handle;
++#elif defined(__APPLE__)
++/* macOS has no eventfd. Event HANDLEs are directx-native events (dxn_event.h):
++ * pointers to user-space state, created by whichever D3D library the embedder
++ * uses for events (Neptune: the D3D11 umbrella, DXMT). That library links the
++ * same directx-native revision as we do, so our copy can signal them
++ * (scripts/build-deps.sh checks both pins match). */
++#include <directx-native/dxn_event.h>
++typedef struct { void *ptr; enum vkd3d_native_sync_handle_type type; } vkd3d_native_sync_handle;
+ #else
+ #include <sys/eventfd.h>
+ #include <sys/poll.h>
+@@ -39,6 +47,8 @@ static inline bool vkd3d_native_sync_handle_eq(vkd3d_native_sync_handle a, vkd3d
+ {
+ #ifdef _WIN32
+     return a.handle == b.handle;
++#elif defined(__APPLE__)
++    return a.ptr == b.ptr;
+ #else
+     return a.fd == b.fd;
+ #endif
+@@ -51,6 +61,11 @@ static inline vkd3d_native_sync_handle vkd3d_native_sync_handle_wrap(HANDLE os_h
+ #ifdef _WIN32
+     handle.handle = os_handle;
+     handle.type = os_handle ? type : VKD3D_NATIVE_SYNC_HANDLE_TYPE_NONE;
++#elif defined(__APPLE__)
++    handle.ptr = os_handle;
++    handle.type = os_handle && dxn_event_is_event(os_handle) ? type : VKD3D_NATIVE_SYNC_HANDLE_TYPE_NONE;
++    if (os_handle && handle.type == VKD3D_NATIVE_SYNC_HANDLE_TYPE_NONE)
++        ERR("Handle %p is not a directx-native event.\n", os_handle);
+ #else
+     handle.fd = (int)(intptr_t)os_handle;
+     /* Treats FD 0 as invalid. FD 0 is technically valid since it's STDIN by default.
+@@ -88,6 +103,15 @@ static inline int vkd3d_native_sync_handle_release(vkd3d_native_sync_handle hand
+     }
+     else
+         return -1;
++#elif defined(__APPLE__)
++    /* Events only: semaphores (swapchain latency handles) are not used natively. */
++    if (handle.type != VKD3D_NATIVE_SYNC_HANDLE_TYPE_NONE)
++    {
++        dxn_event_signal(handle.ptr);
++        return 0;
++    }
++    else
++        return -1;
+ #else
+     if (handle.type != VKD3D_NATIVE_SYNC_HANDLE_TYPE_NONE)
+     {
+@@ -116,6 +140,8 @@ static inline bool vkd3d_native_sync_handle_acquire(vkd3d_native_sync_handle han
+     {
+ #ifdef _WIN32
+         return WaitForSingleObject(handle.handle, INFINITE) == WAIT_OBJECT_0;
++#elif defined(__APPLE__)
++        return dxn_event_wait(handle.ptr, DXN_WAIT_INFINITE) == DXN_WAIT_SIGNALED;
+ #else
+         uint64_t dummy;
+         return (size_t) read(handle.fd, &dummy, sizeof(dummy)) == sizeof(dummy);
+@@ -132,6 +158,8 @@ static inline bool vkd3d_native_sync_handle_acquire_timeout(vkd3d_native_sync_ha
+     {
+ #ifdef _WIN32
+         return WaitForSingleObject(handle.handle, mills) == WAIT_OBJECT_0;
++#elif defined(__APPLE__)
++        return dxn_event_wait(handle.ptr, (uint64_t)mills * 1000000ull) == DXN_WAIT_SIGNALED;
+ #else
+         struct pollfd pfd;
+         uint64_t dummy;
+@@ -174,6 +202,10 @@ static inline HRESULT vkd3d_native_sync_handle_create(UINT initial,
+         if (!(handle->handle = CreateEventA(NULL, FALSE, FALSE, NULL)))
+             hr = HRESULT_FROM_WIN32(GetLastError());
+     }
++#elif defined(__APPLE__)
++    (void)flags;
++    if (!(handle->ptr = dxn_event_create(/* auto-reset, like CreateEventA(FALSE) */ 0, initial ? 1 : 0)))
++        hr = E_OUTOFMEMORY;
+ #else
+     flags = EFD_CLOEXEC;
+     if (type == VKD3D_NATIVE_SYNC_HANDLE_TYPE_SEMAPHORE)
+@@ -191,6 +223,8 @@ static inline void vkd3d_native_sync_handle_destroy(vkd3d_native_sync_handle han
+     {
+ #ifdef _WIN32
+         CloseHandle(handle.handle);
++#elif defined(__APPLE__)
++        dxn_event_close(handle.ptr);
+ #else
+         close(handle.fd);
+ #endif
+diff --git a/libs/vkd3d/queue_timeline.c b/libs/vkd3d/queue_timeline.c
+index 90aebf3..4fed127 100644
+--- a/libs/vkd3d/queue_timeline.c
++++ b/libs/vkd3d/queue_timeline.c
+@@ -153,6 +153,9 @@ vkd3d_queue_timeline_trace_register_event_signal(struct vkd3d_queue_timeline_tra
+ #ifdef _WIN32
+     snprintf(state->desc, sizeof(state->desc), "event: %p, fence: %p, value %"PRIu64,
+             handle.handle, (void*)fence, value);
++#elif defined(__APPLE__)
++    snprintf(state->desc, sizeof(state->desc), "event: %p, fence: %p, value %"PRIu64,
++            handle.ptr, (void*)fence, value);
+ #else
+     snprintf(state->desc, sizeof(state->desc), "event: %d, fence: %p, value %"PRIu64,
+             handle.fd, (void*)fence, value);
+diff --git a/libs/vkd3d/swapchain.c b/libs/vkd3d/swapchain.c
+index 5f2e935..0ac69dc 100644
+--- a/libs/vkd3d/swapchain.c
++++ b/libs/vkd3d/swapchain.c
+@@ -738,6 +738,8 @@ static HANDLE STDMETHODCALLTYPE dxgi_vk_swap_chain_GetFrameLatencyEvent(IDXGIVkS
+         ERR("Failed to duplicate waitable handle.\n");
+         return NULL;
+     }
++#elif defined(__APPLE__)
++    duplicated_handle = dxn_event_duplicate(swapchain->frame_latency_event.ptr);
+ #else
+     /* Ensure that we don't return fd 0 which would confuse the caller. */
+     fd = dup(swapchain->frame_latency_event.fd);

@@ -676,6 +676,7 @@ struct StackCommand: AsyncParsableCommand {
             throw ValidationError("not found: set SEEMLESS_PREFIX or run scripts/build-deps.sh all")
         }
         print("prefix   \(stack.prefix.path(percentEncoded: false))")
+        print("layout   \(stack.layout == .appBundle ? "app bundle" : "build prefix")")
         let missing = stack.missingFiles()
         print("complete \(missing.isEmpty ? "yes" : "NO, missing: " + missing.joined(separator: ", "))")
         if missing.isEmpty {

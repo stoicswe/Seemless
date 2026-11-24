@@ -34,10 +34,12 @@ Severity × likelihood, highest first.
 | Q5 | Shared folder mechanism | S7 |
 | Q6 | Does macOS Game Mode benefit child processes of the fullscreen app? | M7 |
 | Q7 | Can WebView2 Evergreen and the VC++/DirectX redistributables be bundled in our tools ISO, or must they be downloaded in-guest? | M2 (read each licence) |
-| Q8 | Which Windows edition do we recommend (Home vs Pro)? Pro adds Group Policy for update/driver control | M2 |
+| Q8 | (Owner, 2026-11-24: Q8, Q10 and Q11 are answered last, after the other work) Which Windows edition do we recommend (Home vs Pro)? Pro adds Group Policy for update/driver control | M2 |
 | Q9 | Should the app be sandboxed at release? | M8 |
-| Q10 | Project licence: stay MIT for our own code? (repo `LICENSE` is currently MIT) | Before first public release |
+| Q10 | ~~Project licence: stay MIT for our own code?~~ **Answered (owner, 2026-11-24): MIT** for our own code. Upstream projects keep their own licences (QEMU GPL-2.0, swtpm, Mesa, vkd3d-proton LGPL, MoltenVK Apache-2.0, and so on). No Windows ISOs or images are distributed; users bring their own | Done |
 | Q11 | Product name spelling: repo is "Seemless" | Owner's call; code uses `Seemless`/`seemless` consistently |
+| Q12 | Can the agent binaries we publish be built with the CRT/SDK that cargo-xwin downloads, under Microsoft's licence terms (static CRT; which redistribution terms apply)? | Before Preview 1 (public release) |
+| Q13 | How do preview users get the Neptune guest drivers: bundle UTM's signed v0.6 release (see Q1), have the app download it from UTM's release on the user's Mac, or ship our own WP4.6 builds (signing, D12)? | Before Preview 1 (public release) |
 
 ## Licensing and legal constraints
 
@@ -56,6 +58,7 @@ packaging reviewed.
 | vkd3d-proton | LGPL-2.1 (GitHub metadata, 2026-11-23) | Bundled dylib loaded by the render server (D3D12 → Vulkan) | Keep it a separate, replaceable dylib; ship licence and source for our exact build including patches |
 | swtpm / libtpms | BSD-3 | Child process | Notice |
 | glib, libslirp, pixman, libusb | LGPL / BSD / MIT | Dynamically linked by QEMU | LGPL: keep them as replaceable dylibs |
+| Homebrew libraries in the app (glib, gnutls and its gmp/nettle/libtasn1/libunistring/libidn2/p11-kit, gettext libintl, json-glib, pcre2, pixman, libpng, jpeg-turbo, libslirp, libusb, zstd, SDL2/SDL3, OpenSSL 3) | LGPL-2.1+ / LGPL-3.0+-or-GPL-2.0+ / BSD / MIT / Zlib / Apache-2.0, per `homebrew-libraries.tsv` (WP8.5, 2026-11-24) | Dylibs in `Contents/Frameworks`, linked by QEMU and swtpm | Notices from each keg; upstream source tarball in the source offer; replaceable dylibs (re-signing needed). See "Release packaging findings" |
 | Windows guest drivers (kvm-guest-drivers-windows forks) | BSD-2-Clause as reported for `osy/kvm-guest-drivers-windows` (2026-11-23) | In tools ISO | Notice; check fork additions |
 | Mesa-derived UMD (Triton/Neptune guest) | MIT | In tools ISO | Notice |
 | UTM (app), CocoaSpice, QEMUKit | Apache-2.0 | Reference; optional dependency | Notice if any code is used |
@@ -79,12 +82,41 @@ Rules that follow:
    2026-11-23). Build our own firmware with our own (or no) logo before
    release.
 
+### Release packaging findings (WP8.1/8.2/8.5, 2026-11-24)
+
+Found while building the first self-contained app (`docs/release.md`).
+Flagged for the owner; none decided here.
+
+- **L1 — macOS 26 support vs Homebrew (blocker for a macOS 26 release).**
+  On this macOS 27 Mac, 14 bundled Homebrew dylibs need macOS 27 (`minos
+  27.0`), while the app targets 26.0. The audit fails the release build.
+  Build them from pinned source for 26.0, or raise the minimum to 27.
+- **L2 — Homebrew versions are not pinned by SHA.** They are recorded per
+  release (`homebrew-libraries.tsv`, with upstream URL and sha256). A bottle
+  older than its formula has no exact source URL (gnutls 3.8.13 vs 3.8.14,
+  p11-kit 0.26.5 vs 0.26.6 on 2026-11-24); the source archive refuses until
+  `brew upgrade`. Source builds (L1) would fix both.
+- **L3 — (L)GPL-3.0 parts.** gmp, nettle, libunistring, libidn2 are
+  GPL-2.0+ or LGPL-3.0+; Homebrew lists gnutls as LGPL-2.1+ AND GPL-3.0-only
+  (the GPL-3.0 part is its tools, which we do not ship). Choosing the GPL-2.0
+  option keeps them compatible with QEMU's GPL-2.0. LGPL replaceability in a
+  signed app needs re-signing; the notices say so. Needs review.
+  `--disable-gnutls` in QEMU would drop all of these.
+- **L4 — iPXE.** `efi-virtio.rom` (QEMU's prebuilt, from `roms/ipxe`) is
+  GPL-2.0-or-later/UBDL; its source is in the source offer.
+- **L5 — libtpms TPM 2.0 code**: TCG BSD-style licence, redistribution with
+  notice allowed; it states that no patent licence is granted.
+- **L6 — virglrenderer Neptune files**: per-file headers not yet read.
+
 ## Distribution
 
-- Developer ID-signed, notarized DMG; Sparkle updates (M8).
-- Entitlements: `com.apple.security.hypervisor` on the helper;
-  `com.apple.security.cs.allow-jit` if QEMU's TCG paths are compiled in
-  (prefer building HVF-only to avoid it); `com.apple.vm.networking` only if
-  granted.
+- Developer ID-signed, notarized DMG and zip (`scripts/package-release.sh`,
+  `docs/release.md`); Sparkle updates later (WP8.3).
+- Entitlements (WP8.2, checked 2026-11-24): `com.apple.security.hypervisor`
+  on `qemu-system-aarch64` only. No `allow-jit`: we only run `-accel hvf`,
+  and the firmware boots under the hardened runtime without it. No
+  library-validation or DYLD exceptions in Developer ID builds (ad-hoc local
+  builds add `disable-library-validation`, because ad-hoc code has no Team
+  ID). `com.apple.vm.networking` only if granted.
 - Mac App Store is out: sandbox constraints on child processes,
   optional user-supplied frameworks loaded at runtime, and GPL terms.

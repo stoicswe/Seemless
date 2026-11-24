@@ -1,0 +1,31 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Settings (UWP) hosted by ApplicationFrameHost, plus a suspended Calculator and a UWP app still starting",
+  "note": "Not captured from a real guest. A running UWP app's CoreWindow is reparented into the ApplicationFrameWindow (so it is not top-level); a suspended or minimised app's frame and CoreWindow are cloaked. ApplicationFrameHost reports the hosted app's AUMID through the window property store.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x00140210", "class": "ApplicationFrameWindow", "title": "Settings", "style": "0x16CF0000", "ex_style": "0x00200100", "pid": 6820,
+     "process": "C:\\Windows\\System32\\ApplicationFrameHost.exe", "aumid": "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
+     "rect": {"x": 360, "y": 180, "w": 1840, "h": 1200}, "expect": "normal", "note": "app_key comes from the AUMID, not ApplicationFrameHost.exe"},
+    {"hwnd": "0x00150220", "class": "ApplicationFrameWindow", "title": "Calculator", "style": "0x16CF0000", "ex_style": "0x00200100", "pid": 6820,
+     "process": "C:\\Windows\\System32\\ApplicationFrameHost.exe", "aumid": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "cloaked": 2,
+     "rect": {"x": 1200, "y": 300, "w": 640, "h": 1000}, "expect": "ignore:cloaked", "note": "suspended"},
+    {"hwnd": "0x00150228", "class": "Windows.UI.Core.CoreWindow", "title": "Calculator", "style": "0x96000000", "ex_style": "0x00200000", "pid": 8012,
+     "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsCalculator_11.2508.4.0_arm64__8wekyb3d8bbwe\\CalculatorApp.exe",
+     "aumid": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "cloaked": 4, "rect": {"x": 1200, "y": 332, "w": 640, "h": 968},
+     "expect": "ignore:cloaked", "note": "suspended app's CoreWindow, back at top level, cloak inherited"},
+    {"hwnd": "0x00160230", "class": "ApplicationFrameWindow", "title": "", "style": "0x16CF0000", "ex_style": "0x00200100", "pid": 6820,
+     "process": "C:\\Windows\\System32\\ApplicationFrameHost.exe", "cloaked": 1,
+     "rect": {"x": 400, "y": 200, "w": 1600, "h": 1100}, "expect": "ignore:cloaked", "note": "frame created for an app still starting: app-cloaked until its first frame"},
+    {"hwnd": "0x00140218", "class": "ApplicationFrameWindow", "title": "", "style": "0x06CF0000", "ex_style": "0x00200100", "pid": 6820,
+     "process": "C:\\Windows\\System32\\ApplicationFrameHost.exe", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden",
+     "note": "spare frame kept by ApplicationFrameHost"},
+    {"hwnd": "0x00170240", "class": "Windows.UI.Core.CoreWindow", "title": "New notification", "style": "0x96000000", "ex_style": "0x00200188", "pid": 6100,
+     "process": "C:\\Windows\\SystemApps\\ShellExperienceHost_cw5n1h2txyewy\\ShellExperienceHost.exe",
+     "rect": {"x": 1820, "y": 1180, "w": 720, "h": 300}, "expect": "ignore:rule", "note": "a toast: never mirrored (docs/07 bridges notifications)"},
+    {"hwnd": "0x00010010", "class": "Shell_TrayWnd", "style": "0x96000000", "ex_style": "0x00000088", "pid": 3880,
+     "process": "C:\\Windows\\explorer.exe", "rect": {"x": 0, "y": 1504, "w": 2560, "h": 96}, "expect": "ignore:rule"}
+  ]
+}

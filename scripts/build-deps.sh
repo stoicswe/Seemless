@@ -4,7 +4,7 @@
 # Usage:
 #   scripts/build-deps.sh fetch                 # fetch every source in versions.lock
 #   scripts/build-deps.sh [component ...]       # build components in order
-#   scripts/build-deps.sh all                   # angle epoxy dxmt virgl libtpms swtpm qemu
+#   scripts/build-deps.sh all                   # angle epoxy dxmt virgl libtpms swtpm qemu moltenvk vkd3d
 #   scripts/build-deps.sh --force <component>   # rebuild even if stamped done
 #
 # Layout (all gitignored):
@@ -214,7 +214,76 @@ build_qemu() {
   stamp qemu qemu
 }
 
-ORDER=(angle epoxy dxmt virgl libtpms swtpm qemu)
+# MoltenVK from source with patches/moltenvk (S8 H3/H4). Built with its own
+# Xcode projects; External/ is filled from our pinned checkouts instead of
+# fetchDependencies (which would also clone demo-only repos) or the CMake
+# build (whose CPM downloads itself). Installs lib/libMoltenVK.dylib, which
+# vkd3d-proton loads directly (no Vulkan loader).
+MVK_DEPS=(mvk-cereal mvk-vulkan-headers mvk-spirv-cross mvk-spirv-tools mvk-spirv-headers)
+build_moltenvk() {
+  done_already moltenvk && return
+  fetch moltenvk
+  local n; for n in "${MVK_DEPS[@]}"; do fetch "$n"; done
+  apply_patches moltenvk
+  local s="$SRC/moltenvk" ext="$SRC/moltenvk/External"
+  mkdir -p "$ext"
+  ln -sfn "$SRC/mvk-cereal" "$ext/cereal"
+  ln -sfn "$SRC/mvk-vulkan-headers" "$ext/Vulkan-Headers"
+  ln -sfn "$SRC/mvk-spirv-cross" "$ext/SPIRV-Cross"
+  # SPIRV-Tools gets MoltenVK's pre-generated headers unpacked into it, so copy.
+  rm -rf "$ext/SPIRV-Tools"
+  rsync -a --exclude .git "$SRC/mvk-spirv-tools/" "$ext/SPIRV-Tools/"
+  rsync -a --exclude .git "$SRC/mvk-spirv-headers/" "$ext/SPIRV-Tools/external/spirv-headers/"
+  unzip -o -q -d "$ext/SPIRV-Tools" "$s/Templates/spirv-tools/build.zip"
+  rm -rf "$ext/SPIRV-Tools/__MACOSX"
+  # arm64 only; deployment target 26.0 (D10).
+  local xc=(-destination generic/platform=macOS -configuration Release ARCHS=arm64
+            ONLY_ACTIVE_ARCH=NO MACOSX_DEPLOYMENT_TARGET=26.0)
+  ( cd "$s"
+    SKIP_PACKAGING=Y run moltenvk-extdeps xcodebuild build -project ExternalDependencies.xcodeproj \
+      -scheme ExternalDependencies-macOS -derivedDataPath External/build/Intermediates/macOS "${xc[@]}"
+    run moltenvk-extdeps-package env SKIP_PACKAGING= PROJECT_DIR=. CONFIGURATION=Release bash -c \
+      '. ./Scripts/create_ext_lib_xcframeworks.sh && . ./Scripts/package_ext_libs_finish.sh'
+    run moltenvk-build xcodebuild build -project MoltenVKPackaging.xcodeproj \
+      -scheme "MoltenVK Package (macOS only)" "${xc[@]}" )
+  local dylib="$s/Package/Release/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib"
+  [[ -f "$dylib" ]] || die "MoltenVK build produced no $dylib"
+  mkdir -p "$PREFIX/lib"
+  cp "$dylib" "$PREFIX/lib/libMoltenVK.dylib"
+  install_name_tool -id "@rpath/libMoltenVK.dylib" "$PREFIX/lib/libMoltenVK.dylib"
+  stamp moltenvk moltenvk
+}
+
+# vkd3d-proton (osy neptune fork) as the NPT_D3D12_LIBRARY_PATH backend
+# (WP7.5): lib/libvkd3d-proton-d3d12.dylib (+ d3d12core), on MoltenVK.
+build_vkd3d() {
+  done_already vkd3d && return
+  fetch vkd3d-proton-npt
+  fetch directx-native
+  apply_patches vkd3d-proton-npt
+  local s="$SRC/vkd3d-proton-npt" b="$BUILD/vkd3d-npt-build" rev dxmt_rev
+  # Meson wrap: use our pinned checkout, never download (--wrap-mode=nodownload).
+  rev="$(awk -F' = ' '$1 == "revision" { print $2 }' "$s/subprojects/directx-native.wrap")"
+  [[ "$rev" == "$(lock_field directx-native 3)" ]] \
+    || die "vkd3d-proton-npt's directx-native.wrap names $rev, versions.lock pins another"
+  # patches/vkd3d-proton-npt/0002 signals DXMT-created events with our copy of
+  # directx-native; that is only safe while both pin the same revision.
+  if [[ -f "$SRC/dxmt/subprojects/directx-native.wrap" ]]; then
+    dxmt_rev="$(awk -F' = ' '$1 == "revision" { print $2 }' "$SRC/dxmt/subprojects/directx-native.wrap")"
+    [[ "$dxmt_rev" == "$rev" ]] \
+      || die "DXMT pins directx-native $dxmt_rev but vkd3d-proton-npt pins $rev (see patch 0002)"
+  fi
+  rm -rf "$s/subprojects/directx-native"
+  rsync -a --exclude .git "$SRC/directx-native/" "$s/subprojects/directx-native/"
+  local m="-mmacosx-version-min=26.0"
+  run vkd3d-setup meson setup --wipe "$b" "$s" --buildtype=release --wrap-mode=nodownload \
+    -Denable_tests=false -Denable_extras=false --native-file "$s/build-widl.txt" \
+    "-Dc_args=$m" "-Dcpp_args=$m" "-Dc_link_args=$m" "-Dcpp_link_args=$m" "--prefix=$PREFIX"
+  run vkd3d-install meson install -C "$b"
+  stamp vkd3d vkd3d-proton-npt
+}
+
+ORDER=(angle epoxy dxmt virgl libtpms swtpm qemu moltenvk vkd3d)
 
 # ------------------------------------------------------------------ main
 (( $# > 0 )) || { sed -n '2,17p' "$0"; exit 0; }
@@ -222,7 +291,8 @@ if [[ "$1" == "--force" ]]; then FORCE=1; shift; fi
 
 if [[ "$1" == fetch ]]; then
   fetch webkit-angle /Source/ThirdParty/ANGLE/ /Configurations/ /Tools/ccache/
-  for n in libepoxy dxmt virglrenderer libtpms swtpm qemu; do fetch "$n"; done
+  for n in libepoxy dxmt virglrenderer libtpms swtpm qemu moltenvk "${MVK_DEPS[@]}" \
+           vkd3d-proton-npt directx-native; do fetch "$n"; done
   exit 0
 fi
 [[ "$1" == all ]] && set -- "${ORDER[@]}"

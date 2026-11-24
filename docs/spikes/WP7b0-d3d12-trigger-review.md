@@ -98,11 +98,15 @@ KosmicKrisp or MoltenVK (S8).
 - **Prerequisite for any guest test:** the virtio-gpu reset abort (S2; see
   docs/STATUS.md) must be fixed first.
 
-## Contacting UTM's maintainers (not sent)
+## Contacting UTM's maintainers (not going to send)
 
-docs/04 asks us to tell UTM's maintainers our intent before starting. That
-is an outward-facing post, so it is the owner's to send. Draft, for a GitHub
-Discussion on utmapp/UTM or an issue on utmapp/virglrenderer:
+docs/04 asks us to tell UTM's maintainers our intent before starting.
+**Owner decision, 2026-11-24: we won't send this message.** The work goes
+ahead without contacting upstream, and patches stay local to this project
+(`patches/`). That fits the owner's call to keep the virglrenderer reset fix
+local too. The draft is kept below for reference, in case the decision
+changes. Draft, for a GitHub Discussion on utmapp/UTM or an issue on
+utmapp/virglrenderer:
 
 > **Running Triton's D3D12 path on vkd3d-proton on macOS arm64**
 >

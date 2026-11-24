@@ -5,9 +5,13 @@
 #   scripts/build-app.sh --release  release build
 #   scripts/build-app.sh --open     build, then launch
 #
-# The app finds the host stack (build/prefix) and image assets (image/) by
-# walking up from its own location, so run it from build/app/ inside the
-# repository. Ad-hoc signed; real signing and the XPC helper are WP3.3.
+# This is the development bundle: it finds the host stack (build/prefix) and
+# image assets (image/) by walking up from its own location, so run it from
+# build/app/ inside the repository. Ad-hoc signed.
+#
+# A self-contained, signed release app (QEMU, libraries, firmware and image
+# assets inside the bundle) is scripts/package-release.sh, which starts from
+# this script's --release output (docs/release.md).
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"

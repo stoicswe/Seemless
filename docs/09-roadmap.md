@@ -17,6 +17,31 @@ Conventions:
 Legend: ✅ done and tested on this Mac · ◐ partly done, see the row.
 Testing with real Windows media: `docs/testing/first-iso.md`.
 
+## Preview 1 — first public release (owner goal, 2026-11-24)
+
+The owner's goal: "a starting point where other users can start trying to
+use it", as a **public GitHub release**. Users get **desktop mode** and an
+**experimental Zen mode**. D3D11 is the supported graphics API; D3D12 is
+experimental (WP7.5: DXBC only so far). Users bring their own Windows 11 ARM
+ISO and licence.
+
+This list pulls work from the milestones below. It sets their order until
+Preview 1 ships.
+
+| # | Item | Work packages | State / gate |
+|---|------|---------------|--------------|
+| P1 ◐ | **Self-contained, signed app**: QEMU, the graphics stack, swtpm and firmware inside `Seemless.app` (no `build/prefix`), Developer ID signing, hardened runtime with the hypervisor entitlement, notarization, a release zip/dmg, and GPL source offers plus third-party notices in the app | WP8.1, WP8.2, WP8.5 | Scripts done (2026-11-24, `docs/release.md`): the relocated app boots firmware with no `build/prefix` or Homebrew. Open: Homebrew libraries need macOS 27 (docs/10 L1, owner), and Developer ID signing + notarization have not run (needs the owner's identity) |
+| P2 | **First run without Terminal**: pick an ISO, build the VM, the user accepts the Windows licence in the VM window, progress and errors in the app; desktop mode complete (typing, resize changes the guest resolution, HiDPI); audio out | WP3.4, WP3.2, WP3.5 (audio, scaling) | Fast Startup is already off in the image (S6b) |
+| P3 | **Agent in every VM**: WP4.2, then tools install and update (WP4.3), then host info, time sync and graceful shutdown (WP4.4) | WP4.2–4.4 | WP4.2 waits for the owner's CRT/SDK build (`guest/tools/build-agent.sh`) |
+| P4 | **Zen, experimental, on the real agent**: real windows (Z2: WP5.2 with WP5.1's model), input and focus with native cursor shapes (Z3: WP5.3), the clipboard both ways (WP4.5). Tier 2 (crop) only, labelled experimental | WP5.2, WP5.3, WP4.5 | After P3's WP4.2 |
+| P5 | **Supportable**: a diagnostics export for bug reports (logs, configs, no disk contents or personal data), crash reporting, an updater | WP8.6, WP8.3 | After P1 |
+| P6 | **User docs**: README for testers (requirements: Apple silicon, macOS 26+, own ISO; install; known issues), GitHub release notes | WP8.7 (minimal) | Last before release |
+| P7 | **Owner decisions before shipping**: ~~Q10 licence~~ (answered: MIT for our code, upstream keep theirs, no ISO distribution), Q11 name, Q12 agent CRT redistribution, Q13 guest drivers (with Q1, Q7), Q8 edition guidance; Apple Developer account | — | Owner; asked last |
+
+Not in Preview 1: suspend (guest hibernate with viogpu3d is broken, S6b),
+tier 1 atlas, Dock icons per app (WP6.8), shared folders, M7 gaming
+features, our own driver builds (unless Q13 needs them).
+
 ## M0 — Toolchain and spikes
 
 Goal: prove the three risky pillars on this machine before writing product code.
@@ -64,10 +89,10 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 |----|------|------------|
 | WP3.0 ◐ | VM manager app (owner request 2026-11-23): SwiftUI, Liquid Glass, macOS 26+. Library sidebar, new VM from ISO (automatic or manual install), settings incl. boot order/TPM/firmware wait, media attach, start/pause/restart/shut down/force off, firmware setup, snapshots, UEFI/TPM reset. Display is QEMU's own window until WP3.2. SwiftPM-built bundle (`scripts/build-app.sh`) until WP3.3 needs an Xcode project | Every action also works from `seemlessctl`; `VMManager` tests pass; screenshots of stopped and running states checked. Not yet clicked through by a person |
 | WP3.1 ✅ | Productionise `ui/seemless` patch (protocol in 04), cursor events, resize | Patch applies to pinned QEMU; protocol documented in the patch header |
-| WP3.2 ◐ | `DisplayRenderer` + `DesktopWindow` in a minimal app target; keyboard and absolute pointer | Desktop mode usable: type in Notepad, resize window changes guest resolution |
+| WP3.2 ✅ | `DisplayRenderer` + `DesktopWindow` in a minimal app target; keyboard and absolute pointer (P2, 2026-11-24: `KeyboardTranslator` Mac/PC style, resize → guest resolution, full screen, Send Keys menu; guest pointer shape not drawn) | Desktop mode usable: type in Notepad, resize window changes guest resolution |
 | WP3.3 | XPC `SeemlessVMHelper`, entitlements, signing for local runs | App launches the VM through the helper |
-| WP3.4 ◐ | Onboarding UI wired to M2 (the New VM sheet already drives `ImageBuilder`; a first-run flow is still to do) | Fresh user account → working desktop mode without Terminal |
-| WP3.5 | Audio out, HiDPI scaling, `seemlessctl screenshot`, first `bench` tests (boot, idle, desktop gfx) | Bench JSON produced; T1 targets checked |
+| WP3.4 ✅ | Onboarding UI wired to M2: first-run welcome flow (requirements, own ISO, profile, staged install with the guest drivers, Windows started for the person to accept the licence) (P2, 2026-11-24; driven by developer switches, not by a person's clicks) | Fresh user account → working desktop mode without Terminal |
+| WP3.5 ◐ | Audio out, HiDPI scaling, `seemlessctl screenshot`, first `bench` tests (boot, idle, desktop gfx). Done in P2: audio (usb-audio on CoreAudio, on by default), Standard/Retina scaling; `screenshot` in WP3.1. Bench not started | Bench JSON produced; T1 targets checked |
 
 ## M4 — Guest agent and protocol
 
@@ -114,7 +139,10 @@ WP7.5 D3D12 host backend (now the whole D3D12 critical path: upstream's
 guest driver already speaks D3D12, see WP7b.0): vkd3d-proton built as a
 native macOS dylib for `NPT_D3D12_LIBRARY_PATH`, on KosmicKrisp or MoltenVK, wired into the Neptune
 host with shared textures/fences (per S8), tested with a host-side D3D12
-replay harness · WP7.5b optional D3DMetal opt-in UI and Rosetta render
+replay harness (◐ 2026-11-24: built on patched MoltenVK and wired in; host
+test for ladder rungs 1–3, not a replay harness; guest rungs 1–3 pass with
+DXBC, DXIL blocked by Triton's caps, shared textures not started;
+`docs/spikes/WP7.5-d3d12-host-backend.md`) · WP7.5b optional D3DMetal opt-in UI and Rosetta render
 server · WP7.6 vCPU QoS, idle
 CPU, balloon, disk tuning · WP7.7 present-path copy removal and frame pacing
 · WP7.8 D3D9 path, Venus-for-Windows evaluation ·
@@ -131,7 +159,7 @@ usable D3D12 driver, replace this milestone with "integrate upstream's".
 
 | ID | Work | Acceptance |
 |----|------|------------|
-| WP7b.0 ✅ | Trigger review: state of upstream D3D12 work; contact UTM maintainers; findings note with go/no-go | Note in `docs/spikes/` and decision D3b updated |
+| WP7b.0 ✅ | Trigger review: state of upstream D3D12 work; contact UTM maintainers (owner, 2026-11-24: not doing; draft kept in the note); findings note with go/no-go | Note in `docs/spikes/` and decision D3b updated |
 | WP7b.1 | Study: D3D12 DDI surface, what the KMD must provide for D3D12 (GPU VA, residency, scheduling), list of DDI entry points grouped by bring-up rung | Design note reviewed against Triton's structure |
 | WP7b.2 | Protocol: `d3d12.idl` through the Neptune code generator; host decoder stubs | Generated code builds on both sides; round-trip encode/decode tests pass on the Mac |
 | WP7b.3 | Rungs 1–2: device creation, clear + readback | Guest test program output matches host reference |
@@ -142,12 +170,13 @@ usable D3D12 driver, replace this milestone with "integrate upstream's".
 
 ## M8 — Release engineering
 
-WP8.1 bundle assembly (prefix → `Contents/Frameworks`, `Helpers`), rpath
-fix-ups, universal/arch checks · WP8.2 Developer ID signing, hardened
-runtime, notarization · WP8.3 updater (Sparkle) and guest tools versioning ·
+WP8.1 ◐ bundle assembly (prefix → `Contents/Frameworks`, `Helpers`), rpath
+fix-ups, universal/arch checks (done 2026-11-24 except macOS 26 libraries,
+docs/10 L1) · WP8.2 ◐ Developer ID signing, hardened runtime, notarization
+(scripts done; first Developer ID run is the owner's) · WP8.3 updater (Sparkle) and guest tools versioning ·
 WP8.4 driver signing for release (D12) and Secure Boot decision ·
-WP8.5 licence compliance bundle (source offers for GPL parts, third-party
-notices) · WP8.6 crash reporting and diagnostics export · WP8.7 documentation
+WP8.5 ◐ licence compliance bundle (source offers for GPL parts, third-party
+notices; scripts done, owner review of docs/10 L1–L6) · WP8.6 crash reporting and diagnostics export · WP8.7 documentation
 site and compatibility guidance.
 
 ## Dependency sketch

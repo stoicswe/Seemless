@@ -80,10 +80,10 @@ What has to exist, and who builds it:
 | Piece | State | Owner |
 |-------|-------|-------|
 | Neptune D3D12 protocol + guest D3D12 UMD | **Shipped upstream.** Triton implements the D3D12 DDI (`triton*12.c` on `utmapp/mesa` `neptune`), and the v0.6 driver package exports `OpenAdapter12`. Proven by UTM on D3DMetal only. The host loads the D3D12 backend from `NPT_D3D12_LIBRARY_PATH`; on Apple arm64 it defaults to DXMT, which has no D3D12 (WP7b.0) | Upstream. Our own only if the trigger below fires (it had not, 2026-11-23) |
-| vkd3d-proton for the `NPT_D3D12_LIBRARY_PATH` slot | Upstream keeps a Neptune fork (`osy/vkd3d-proton` `neptune`) for the Linux embedder path. On macOS arm64 the contract is plain calling convention, `D3D12CreateDevice` required, and the ABI check and heap import optional | Us (WP7.5) |
-| vkd3d-proton as a native macOS arm64 library | Upstream targets Wine/Proton on Linux; a native (non-Wine) build with the macOS WSI pieces removed or stubbed is our work, similar to what UTM did for DXMT (`dxmt-native`) | Us (S8, WP7.5) |
+| vkd3d-proton for the `NPT_D3D12_LIBRARY_PATH` slot | **Built (WP7.5).** Upstream's Neptune fork (`osy/vkd3d-proton` `neptune`) with `patches/vkd3d-proton-npt/`. On macOS arm64 the contract is plain calling convention, `D3D12CreateDevice` required, and the ABI check and heap import optional. The launcher sets `NPT_D3D12_LIBRARY_PATH` for the DXMT backend. Neptune's event HANDLEs are DXMT's directx-native events; vkd3d-proton signals them with its own copy, which is safe only while both pin the same directx-native revision (checked by `build-deps.sh`) | Us (WP7.5) |
+| vkd3d-proton as a native macOS arm64 library | **Built (WP7.5):** `scripts/build-deps.sh vkd3d` → `build/prefix/lib/libvkd3d-proton-d3d12{,core}.dylib`. No Vulkan loader: it loads `libMoltenVK.dylib` next to itself (`VKD3D_VULKAN_LIBRARY` overrides) | Us (S8, WP7.5) |
 | Cross-process shared textures and fences for the D3D12 backend | Required by Neptune/Triton (DWM composition, swapchains). Implement the same way as for DXMT: `shm_open`-backed `MTLBuffer`s, exposed through MoltenVK's Metal interop (`VK_EXT_metal_objects`) | Us (WP7.5) |
-| MoltenVK feature coverage | **The main risk.** vkd3d-proton assumes a modern desktop Vulkan driver. MoltenVK does not implement all of Vulkan, and UTM reports even DXVK (D3D11) on MoltenVK as unstable | S8 produces the exact gap list; then patch MoltenVK/vkd3d-proton, or pick KosmicKrisp where available |
+| MoltenVK feature coverage | **The main risk.** vkd3d-proton assumes a modern desktop Vulkan driver. MoltenVK does not implement all of Vulkan, and UTM reports even DXVK (D3D11) on MoltenVK as unstable. **Rung 1 reached (WP7.5):** S8's four hard gaps are patched (H1/H2 in vkd3d-proton, H3/H4 in MoltenVK built from source, `patches/moltenvk/`), giving FL 11_0 / SM 6.0 without any capability bypass. H3 and H4 have known deviations (`docs/spikes/WP7.5-d3d12-host-backend.md`) | S8 produced the gap list; WP7.5 patched rung 1; FL 12_0 / SM 6.x work remains |
 
 Rules for this path:
 
@@ -91,14 +91,19 @@ Rules for this path:
   natively, run its test suite and D3D12 demos against MoltenVK on this Mac,
   and list every required-but-missing Vulkan feature or extension. Do not
   guess the list from memory.
-- Keep the Vulkan driver swappable (ICD selection by environment): MoltenVK
-  is the default, KosmicKrisp (Mesa's Vulkan-on-Metal; needs macOS 26, which
-  every supported Mac has; experimental
-  per UTM 5.0 notes) is the alternative to test in S8.
+- Keep the Vulkan driver swappable: MoltenVK is the default, KosmicKrisp
+  (Mesa's Vulkan-on-Metal; needs macOS 26, which every supported Mac has;
+  experimental per UTM 5.0 notes) is the alternative. There is no Vulkan
+  loader in the D3D12 path (WP7.5): vkd3d-proton loads `libMoltenVK.dylib`
+  directly, and `VKD3D_VULKAN_LIBRARY=<dylib>` swaps the driver (a loader
+  plus `VK_DRIVER_FILES` works through that too).
 - D3D11 stays on DXMT. Do not route D3D11 through DXVK → MoltenVK; UTM tried
   it and found it unstable, and DXMT avoids one translation layer.
 - MoltenVK is shared with Venus (Vulkan for the guest), so there is one
-  Vulkan driver to pin, patch and ship.
+  Vulkan driver to pin, patch and ship. **Not yet true (WP7.5):** the D3D12
+  path uses our MoltenVK built from source (`build-deps.sh moltenvk`, with
+  the H3/H4 patch), but Venus still dlopens `libvulkan` (Homebrew's loader
+  and Homebrew's MoltenVK ICD). Pointing Venus at the same build is open.
 - If S8 ends in "no-go", the decision goes back to the owner with the gap
   list; the options then are patching MoltenVK, waiting on KosmicKrisp, or
   D3DMetal-only D3D12.
@@ -124,8 +129,10 @@ Upstream's Triton already has a D3D12 path
 - upstream's driver exists but is tied to D3DMetal-only behaviour that
   vkd3d-proton/MoltenVK cannot satisfy.
 
-Before starting, open an issue/discussion with UTM's maintainers stating the
-intent, to avoid duplicate work and to agree on the wire protocol.
+~~Before starting, open an issue/discussion with UTM's maintainers stating the
+intent.~~ **Owner, 2026-11-24: not doing this.** We don't contact upstream,
+and patches stay local in `patches/` (the draft message is kept in
+`docs/spikes/WP7b0-d3d12-trigger-review.md`).
 
 **Design if we build it** — the same shape as Triton, one API up:
 
@@ -143,7 +150,17 @@ notes first): model on a proven design (Triton and Venus), give every step a
 terminal-checkable pass condition, and keep a known-good reference (the same
 D3D12 test running natively on vkd3d-proton on the host) to compare against.
 
-Bring-up ladder, each rung a work package:
+Bring-up ladder, each rung a work package. Host and guest tests for rungs
+1–3: `scripts/d3d12-host/` and `guest/tools/d3d12test/` (WP7.5; results in
+`docs/spikes/WP7.5-d3d12-host-backend.md`). State on 2026-11-24 with
+upstream's driver: rungs 1–3 pass in the guest with DXBC shaders, rung 3's
+frame byte-identical to the host. **DXIL is refused in the guest:** Triton
+advertises SM 6.x only for a capset with `CAP_DXIL`, which Neptune sets for
+D3DMetal and not for DXMT, and forcing the bit makes Triton also claim
+pipeline level 12_1, which our host does not back (device creation fails).
+Triton also derives FL 12_0 and tiled tier 2 by itself while the host
+device is FL 11_0, tier 0. Both need a guest-driver change (WP4.6) or more
+host features; rung 4 needs Metal-backed shared textures for vkd3d-proton.
 
 1. Driver loads; `D3D12CreateDevice` succeeds; `dxdiag` reports feature level.
 2. Clear a render target and read it back (no presentation).
@@ -222,9 +239,10 @@ D-Bus cannot carry Mach ports). Note: `docs/spikes/S3-display-export.md`.
   remains an M7 optimisation.
 - Host side: `SeemlessKit.DisplayClient` (Swift, Mach plumbing in the
   `CSeemlessDisplay` C target; no QEMU code). `LaunchOptions.Display.exported`
-  starts QEMU this way. The app starts `cocoa` by default; "Start without
-  Window" exports, and Show Display then opens the app's desktop window
-  (below).
+  starts QEMU this way. Since P2 (2026-11-24) the app always starts VMs
+  exported and opens its desktop window; QEMU's `cocoa` window is only
+  "Start in QEMU Window" (troubleshooting). Automatic installs are exported
+  too (no QEMU window).
 
 ### App-side renderer
 
@@ -235,8 +253,17 @@ D-Bus cannot carry Mach ports). Note: `docs/spikes/S3-display-export.md`.
   (`DesktopSession`, `DesktopView`) reuses Zen's `ZenRenderer` with a full
   crop; geometry is `SeemlessKit.DesktopGeometry` (aspect fit, view point →
   guest pixel, window sizing). A titled, resizable window whose content keeps
-  the guest's aspect ratio; resizing scales and does **not** change the guest
-  resolution yet. A guest resolution change reshapes the window (same width).
+  the guest's aspect ratio; resizing scaled the guest. **Since P2
+  (2026-11-24):** the window resizes freely and the end of a live resize,
+  the zoom button, full screen, or a move to a screen with another backing
+  scale sends `SET_SIZE` (`DisplayClient.requestSize`) with the size from
+  `DisplayResize.guestSize` (width a multiple of 8, height even, 800×600 to
+  7680×4320) and the physical size in mm from the screen
+  (`CGDisplayScreenSize`). viogpu3d applies it within about a second (no
+  agent needed). A resolution the guest picks itself (one that does not
+  answer our request) reshapes the window to it. "Resize Windows with the
+  Window" off restores the old scale-only behaviour. Measured on the P2 VM:
+  a 1280×720-point window → guest 1280×720; Retina full screen → 3024×1898.
   Input is QMP `input-send-event` on `input.sock`, as Zen, so Zen and the
   desktop window are never open together for one VM.
 - Seamless mode: each window view samples a sub-rect of the atlas texture
@@ -245,6 +272,13 @@ D-Bus cannot carry Mach ports). Note: `docs/spikes/S3-display-export.md`.
 - HiDPI: the guest runs at the Mac display's pixel resolution with Windows
   scaling set by the agent to match the backing scale factor (200% on Retina),
   so there is no host-side scaling in the common case.
+  **As built before the agent (WP3.5, P2):** a per-VM choice
+  (`DisplayScaling` in `vms/<name>/display.json`, Display ▸ Scaling).
+  *Standard* (default): one guest pixel per Mac point, Windows at 100 %,
+  drawn 2×2 on Retina. *Retina*: one guest pixel per screen pixel. Windows
+  did **not** change its scale on its own when the EDID reported the real
+  size (~255 dpi), so Retina needs Windows' Scale set to 200 % by hand until
+  WP4.4's agent sets DPI. That is why Standard is the default.
 - HDR, VRR/ProMotion pacing: M7.
 
 ## Resolution and multi-monitor

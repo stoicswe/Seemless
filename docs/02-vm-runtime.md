@@ -90,7 +90,7 @@ and `D3DMETAL_FRAMEWORK_PATH` when D3DMetal is selected.
 | GPU | `virtio-ramfb-gl` with `venus=true,neptune=true` | ramfb gives firmware/WinPE a framebuffer before drivers load. `max_outputs=2` for the atlas (verify the UTM fork supports it on this device: spike S5) |
 | Network | `vmnet-shared` preferred, slirp fallback | vmnet needs either root or the `com.apple.vm.networking` entitlement, which Apple grants restrictively. Ship slirp as the default until that is resolved; slirp is fine for most apps but has no inbound and ICMP quirks |
 | TPM | swtpm over unix socket | Lets Windows see TPM 2.0 without registry bypasses |
-| Audio | Start with `usb-audio` (inbox driver) | Evaluate `virtio-sound` + viosnd for latency in M7 |
+| Audio | `usb-audio` on `-audiodev coreaudio`, always on (inbox USB Audio driver; build 26300 lists it as "Speakers, 2- Audio Device", default device, P2 2026-11-24) | Evaluate `virtio-sound` + viosnd for latency in M7 |
 | Input | `usb-tablet` for absolute, plus a relative mouse for game mode | virtio-input has lower overhead but needs a guest driver (vioinput); evaluate in M7 |
 | Clock | `-rtc base=localtime` | Windows assumes local-time RTC; agent also resyncs time after resume |
 
@@ -121,6 +121,19 @@ vars file), clear TPM (empty state dir).
 
 Note: the edk2 build from UTM's QEMU fork shows UTM's logo at boot. Replace
 it with our own firmware build before any release (docs/10).
+
+## Host stack inside the release app (WP8.1)
+
+Development runs use `build/prefix`. A release `Seemless.app`
+(`scripts/package-release.sh`, runbook `docs/release.md`) carries the whole
+stack: `Contents/Helpers/` (qemu-system-aarch64, qemu-img, swtpm,
+virgl_render_server, seemlessctl), `Contents/Frameworks/` (every dylib,
+found by `@rpath`), `Contents/Resources/qemu/` (firmware and ROMs) and
+`Contents/Resources/image/` (answer files, scripts, recipes).
+`HostStack.locate()` prefers `$SEEMLESS_PREFIX`, then the enclosing app
+bundle, then `build/prefix`. In the bundle layout the command line gains
+`-L Contents/Resources/qemu` after `-no-user-config`, and the environment
+drops `DYLD_FALLBACK_LIBRARY_PATH` and adds `RENDER_SERVER_EXEC_PATH`.
 
 ## Storage layout on the host
 

@@ -1,0 +1,131 @@
+# Default window classification rules (docs/05, "Which windows are mirrored").
+# Embedded in the agent at build time. An override file on the tools ISO
+# (/agent/rules.toml) is read first, so it can correct these without a
+# rebuild. Format: crates/windows-model/src/rules.rs. First match wins.
+#
+# Only exceptions belong here. The generic style-based rules (owner,
+# WS_CAPTION, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, ...) live in classify.rs;
+# every change here needs a recorded dump in tests/data that shows why.
+
+# --- Shell: never mirrored. Start, search and the tray get host UI (docs/07).
+
+[[rule]]
+name = "taskbar"
+class = "Shell_TrayWnd"
+ignore = true
+
+[[rule]]
+name = "secondary taskbar"
+class = "Shell_SecondaryTrayWnd"
+ignore = true
+
+[[rule]]
+name = "desktop (Progman)"
+class = "Progman"
+ignore = true
+
+[[rule]]
+name = "desktop (WorkerW)"
+class = "WorkerW"
+ignore = true
+
+[[rule]]
+name = "Start menu"
+process = "StartMenuExperienceHost.exe"
+ignore = true
+
+[[rule]]
+name = "Search"
+process = "SearchHost.exe"
+ignore = true
+
+[[rule]]
+name = "shell flyouts and toasts"
+process = "ShellExperienceHost.exe"
+ignore = true
+
+[[rule]]
+name = "Quick Settings and notification centre (24H2+)"
+process = "ShellHost.exe"
+ignore = true
+
+[[rule]]
+name = "touch keyboard, emoji and clipboard panel"
+process = "TextInputHost.exe"
+ignore = true
+
+[[rule]]
+name = "lock screen"
+process = "LockApp.exe"
+ignore = true
+
+[[rule]]
+name = "Alt-Tab / task view"
+class = "XamlExplorerHostIslandWindow"
+ignore = true
+
+[[rule]]
+name = "Snap assist overlay"
+class = "Shell_LightDismissOverlay"
+ignore = true
+
+# --- Our own windows (hidden foreground sink, diagnostics).
+
+[[rule]]
+name = "Seemless session agent"
+process = "seemless-agent.exe"
+ignore = true
+
+[[rule]]
+name = "Seemless service"
+process = "seemless-agent-svc.exe"
+ignore = true
+
+# --- Shadows: the Mac draws its own.
+
+[[rule]]
+name = "menu and dialog drop shadow"
+class = "SysShadow"
+ignore = true
+
+# --- Transients by class (docs/05: menus, tooltips, dropdowns, drag images).
+
+[[rule]]
+name = "Win32 menu"
+class = "#32768"
+kind = "menu"
+
+[[rule]]
+name = "common-controls tooltip"
+class = "tooltips_class32"
+kind = "tooltip"
+
+[[rule]]
+name = "Xaml tooltip / flyout"
+class = "Xaml_WindowedPopupClass"
+kind = "popup"
+
+[[rule]]
+name = "WinUI 3 popup (context menus in Explorer, Terminal)"
+class = "Microsoft.UI.Content.PopupWindowSiteBridge"
+kind = "popup"
+
+[[rule]]
+name = "combo box dropdown"
+class = "ComboLBox"
+kind = "popup"
+
+[[rule]]
+name = "drag image"
+class = "SysDragImage"
+kind = "popup"
+
+[[rule]]
+name = "Office tooltip and ribbon popup"
+class = "Net UI Tool Window"
+kind = "popup"
+
+[[rule]]
+name = "Office splash"
+class = "MsoSplash"
+kind = "splash"

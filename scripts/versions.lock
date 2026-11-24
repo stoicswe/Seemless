@@ -6,8 +6,9 @@
 # Recorded 2026-11-23 from branch heads / latest release tags.
 # Status: host-stack pins BUILD (S1, 2026-11-23, docs/spikes/S1-host-stack-build.md).
 # They are not yet confirmed to WORK at runtime; S2 does that.
-# moltenvk/vkd3d-proton: recorded, not built (S1 used Homebrew molten-vk 1.4.2;
-# vkd3d-proton is S8). Guest driver sources: not built (WP4.6).
+# moltenvk and vkd3d-proton-npt (with their dependencies below): built by
+# build-deps.sh since WP7.5 (2026-11-24); vkd3d-proton v3.1 is S8's pin only.
+# Guest driver sources: not built (WP4.6).
 
 # --- Host graphics stack (order follows UTM's Triton build notes) ---
 webkit-angle      https://github.com/utmapp/WebKit.git                    pinned-by-utm   6a7f464047e2f6f2b65fe315aaad5d1ff3229cb7
@@ -37,9 +38,41 @@ win-umd-mesa      https://github.com/osy/virtio-win-mesa.git              neptun
 win-build-mesa    https://github.com/osy/build-mesa.git                   main            51c5c4e040a1148e751ef62310533a1d9a79a315
 neptune-protocol  https://github.com/osy/neptune-protocol.git             main            b0152e59f068f04138520fe471a96263c8888860
 
-# --- D3D12 host backend (WP7.5; candidate, not built) ---
+# --- D3D12 host backend (WP7.5) ---
 # Upstream's Neptune fork of vkd3d-proton (native dmabuf interop). WP7b.0.
+# Carries patches/vkd3d-proton-npt/*.patch (macOS port, H1/H2). Its git
+# submodules are fixed by this commit (Vulkan-Headers 0e9de56, dxil-spirv
+# 7ecda13 → SPIRV-Cross 4b7bcb7, SPIRV-Tools 199cb20, spirv-headers c63848e,
+# dxbc-spirv d5b0643 → spirv_headers c8ad050; SPIRV-Headers f88a2d7).
 vkd3d-proton-npt  https://github.com/osy/vkd3d-proton.git             neptune         a8b7cd423d85ff2759a395fd12aae9f0bf123dcc
+# Meson wrap of vkd3d-proton-npt (subprojects/directx-native.wrap names this
+# SHA); build-deps.sh fetches it into subprojects/ so meson never downloads.
+directx-native    https://github.com/osy/directx-native.git           main            7258be1c56cdbf1e55c56b1bc4a866169c8ca0da
+# MoltenVK is built from source (above pin, patches/moltenvk/*.patch for
+# H3/H4). Its External/ dependencies, from MoltenVK v1.4.2 ExternalRevisions/
+# (Volk and Vulkan-Tools are demo-only and not fetched):
+mvk-spirv-cross   https://github.com/KhronosGroup/SPIRV-Cross.git     mvk-1.4.2       6c09849fe88c48eaed08413aa022aaa136a3a057
+mvk-spirv-headers https://github.com/KhronosGroup/SPIRV-Headers.git   mvk-1.4.2       29981f65241605e08b0ede4cfeb999fe3b723c6a
+mvk-spirv-tools   https://github.com/KhronosGroup/SPIRV-Tools.git     mvk-1.4.2       0d6fd73ca73830ccab5fa1f00ed5ed40124e2c55
+mvk-vulkan-headers https://github.com/KhronosGroup/Vulkan-Headers.git mvk-1.4.2       e3b1eec08173d6b825cd3ac88c885a63b621504a
+mvk-cereal        https://github.com/USCiLab/cereal.git               mvk-1.4.2       a56bad8bbb770ee266e930c95d37fff2a5be7fea
+
+# --- Libraries QEMU and swtpm link (P1, owner 2026-11-24: "build from source") ---
+# Built by build-deps.sh for macOS 26.0 instead of taking Homebrew's bottles,
+# which this macOS 27 Mac builds with minos 27.0 (docs/10 L1). Versions match
+# what Homebrew had on 2026-11-24.
+pcre2             https://github.com/PCRE2Project/pcre2.git               pcre2-10.49     6f9d7c1373262c541324a16a358785b33ef116cf
+glib              https://gitlab.gnome.org/GNOME/glib.git                 2.90.1          e05063ccc6c8f222465a1080927f4c14349f3de6
+# glib's meson subprojects, as its subprojects/*.wrap name them (gvdb: wrap
+# revision; proxy-libintl: tag 0.5, the wrap's tarball). libffi and zlib come
+# from the macOS SDK (/usr/lib), so they are not built.
+gvdb              https://gitlab.gnome.org/GNOME/gvdb.git                 glib-wrap       2b42fc75f09dbe1cd1057580b5782b08f2dcb400
+proxy-libintl     https://github.com/frida/proxy-libintl.git              0.5             33934de09af6a6627eb44e310a8079df009abdbb
+json-glib         https://gitlab.gnome.org/GNOME/json-glib.git            1.10.8          8273a7d2539c115c0eb1bcc9e8cd9d26fcde204a
+openssl           https://github.com/openssl/openssl.git                  openssl-3.5.9   45e844fa2a14ec92d146bd8f5778ac130b6625fb
+libslirp          https://gitlab.freedesktop.org/slirp/libslirp.git       v4.9.7          ce12dcddf710a71dc0de6450ec95edbadf8e9f66
+libpng            https://github.com/pnggroup/libpng.git                  v1.6.59         cd952f49f95bb27154ae77dbb103032d95f6e580
+libjpeg-turbo     https://github.com/libjpeg-turbo/libjpeg-turbo.git      3.2.1           7b4993786d856cbccabfc0ed2f923ba000e326cc
 
 # --- Package-manager dependencies (WP4.1) ---
 # Fetched by SwiftPM and Cargo, not by build-deps.sh. Their lockfiles are

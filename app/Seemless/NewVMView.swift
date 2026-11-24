@@ -21,7 +21,6 @@ struct NewVMView: View {
     @State private var mode: Mode?
     @State private var profile: InstallProfile?
     @State private var showingAbout = false
-    @State private var acceptLicense = false
     @State private var username = "Seemless"
     @State private var startNow = true
     @State private var creating = false
@@ -37,7 +36,7 @@ struct NewVMView: View {
                             .listRowInsets(EdgeInsets())
                             .padding(.vertical, 4)
                         Link("Get Windows 11 for Arm from Microsoft",
-                             destination: URL(string: "https://www.microsoft.com/software-download/windows11arm64")!)
+                             destination: FirstRun.windowsDownloadPage)
                             .font(.callout)
                     }
                 }
@@ -54,7 +53,7 @@ struct NewVMView: View {
                         Text("Automatic installs Windows by itself in about 5–15 minutes. Manual runs Microsoft’s own Setup for you to click through.")
                             .font(.callout).foregroundStyle(.secondary)
                     case .automatic:
-                        Text("Seemless applies Windows from the ISO and shuts the VM down when setup finishes. The network stays off during install, so Windows never asks for a Microsoft account.")
+                        Text("Seemless installs Windows from the ISO with the 3D graphics driver, then starts it in its own window. The network stays off during install, so Windows never asks for a Microsoft account.")
                             .font(.callout).foregroundStyle(.secondary)
                     case .manual:
                         Text("Creates a blank disk with the ISO attached and runs Windows Setup normally. Seemless presses a key at “Press any key to boot from CD” on the first start.")
@@ -94,9 +93,12 @@ struct NewVMView: View {
                     }
 
                     Section {
-                        Toggle(isOn: $acceptLicense) {
-                            Text("I accept the Microsoft Software License Terms now")
-                            Text("Off: Windows shows its licence page on the VM’s first start for you to accept there.")
+                        Label("Windows shows Microsoft’s licence terms when it first starts. You read and accept them yourself in the Windows window; Seemless never accepts them for you.",
+                              systemImage: "doc.text")
+                            .font(.callout).foregroundStyle(.secondary)
+                        if model.drivers == nil {
+                            Label("3D graphics driver not found: Windows installs with basic graphics only.", systemImage: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
                         }
                         if model.assets == nil {
                             Label("Install scripts (image/) not found next to the app.", systemImage: "exclamationmark.triangle")
@@ -247,7 +249,6 @@ struct NewVMView: View {
             guard let iso, let profile else { creating = false; return }
             var request = ImageBuilder.Request(iso: iso, vm: config)
             request.imageIndex = edition
-            request.acceptWindowsLicense = acceptLicense
             request.recipe = profile.recipe
             request.username = username
             model.createAutomatic(request)
@@ -287,7 +288,7 @@ private struct RequiredHeader: View {
 }
 
 /// One selectable profile: radio-style, whole row clickable.
-private struct ProfileRow: View {
+struct ProfileRow: View {
     var profile: InstallProfile
     var selected: Bool
     var choose: () -> Void
@@ -337,7 +338,7 @@ struct ProfilesAboutView: View {
                         removes: ["Nothing"],
                         keeps: "Windows 11 exactly as on the ISO. Larger and busier, but nothing missing. Useful for comparison or when an app needs something the lean profiles remove")
 
-                Text("Every profile installs unattended, uses a local account, keeps Windows Update and Defender, and shows Microsoft’s licence page on first start unless you accepted it here.")
+                Text("Every profile installs unattended, uses a local account, keeps Windows Update and Defender, and shows Microsoft’s licence page on first start for you to accept.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(20)

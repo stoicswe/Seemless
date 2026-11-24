@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Contents/Helpers/qemu-system-aarch64 (hardened runtime).
+     hypervisor: -accel hvf (Hypervisor.framework).
+     No allow-jit: Seemless only runs -accel hvf, so QEMU's TCG never
+     allocates its JIT buffer (checked WP8.2: firmware boot under the
+     hardened runtime without it). Add com.apple.security.cs.allow-jit only
+     if TCG is ever used. No DYLD_* or library-validation exceptions: every
+     dylib is in Contents/Frameworks, found by rpath, signed by the same
+     identity. -->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.hypervisor</key><true/>
+</dict>
+</plist>

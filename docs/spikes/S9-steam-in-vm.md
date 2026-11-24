@@ -1,6 +1,6 @@
 # S9 — Steam games in the VM (feasibility, notes only)
 
-Date: 2026-11-24. Status: **desk spike + E1**. No product code was changed in
+Date: 2026-11-24. Status: **desk spike + E1**; E5/E6 prepared, not run (see Experiments). No product code was changed in
 either repository. Nothing was downloaded and no one signed in. For E1 the
 owner picked a temporary tool for Portal 2 in Steam (Q1). The evidence is source code, the Mac Steam client's own
 logs on this machine (read only), and web sources (listed at the end). Every
@@ -877,8 +877,33 @@ user app: through `Launch` from a share, or `vm open`. It never bundles them.
 | Id | What | Touches |
 |---|---|---|
 | E1 | Env/argv dump tool for one game | **Done 2026-11-24** (Portal 2), including Stop (SIGTERM); results in Q1 |
-| E5 | Virtio-serial round trip over a third port | Test VM only; a throwaway `-device` line |
-| E6 | `_CommonRedist` VC++ x64 + DirectX Jun2010 on 26300 ARM64, then a D3D11 x64 game | Test VM; copies redists from the Mac library |
+| E5 | Virtio-serial round trip over a third port | Test VM only. The port is hot-added over QMP (`chardev-add` + `device_add virtserialport`), so kit's launch code is not touched |
+| E6 | `_CommonRedist` VC++ x64 + DirectX Jun2010 on 26300 ARM64, then a D3D11 x64 game (REKA, Unity, x64, 2.4 GB) | Test VM; copies redists and the game from the Mac library |
+
+**E5/E6 status (2026-11-24): not run.**
+- A throwaway VM build (`build/s9/root`, build 26300, recipe `seemless-gaming`,
+  UTM's ARM64 vioserial, NetKVM and viogpu3d drivers injected) was started.
+  At the owner's request it was stopped part-way (too many VMs at once) and
+  deleted with `vm delete`. No results.
+- Both experiments will run on WP4.2's agent VM (`build/wp42/root`) once it
+  is up. Ready to use:
+  - `spikes/S9-steam/qmp.py`: a QMP helper that hot-adds the port, types into
+    the guest with `send-key`, and takes screendumps.
+  - `spikes/S9-steam/e5-host.py` and `e5-guest.ps1`: an echo over
+    `\\.\Global\seemless.steam` (C# via `Add-Type`). The host reports
+    p50/p90/p99/max at 16 B, 256 B, 4 KiB and 64 KiB.
+  - `spikes/S9-steam/e6-guest.ps1`: a minimal installscript runner (reads
+    each `installscript.vdf` "Run Process" entry, honours `HasRunKey` and
+    `Is64BitWindows`). It records which DLLs landed and their machine type,
+    then starts REKA with `steam_appid.txt` and no Steam client, and watches
+    it for 2 min.
+  - `build/s9/s9-usb.img` (FAT32, label S9): `_CommonRedist`, REKA and the
+    guest scripts. A copy of game files for this test only; never commit or
+    bundle it.
+  - `build/s9/drivers/`: the three ARM64 drivers, copied from
+    `build/s2-downloads/utm-guest-tools-0.1.276.iso`.
+- To run them, the VM needs vioserial (E5) and viogpu3d (E6). Check that
+  WP4.2's VM has both.
 | ~~E2~~ | Two clients, one account | Dropped: no Windows Steam in the guest (owner decision 1) |
 | ~~E3~~, ~~E4~~ | Windows Steam adopting the share; Windows Steam on ARM64 | Dropped for the same reason |
 

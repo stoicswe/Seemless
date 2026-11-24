@@ -132,6 +132,7 @@ public actor VMProcess {
         }
         try fm.createDirectory(at: files.tpmState, withIntermediateDirectories: true)
         try fm.createDirectory(at: files.logs, withIntermediateDirectories: true)
+        try fm.createDirectory(at: files.shaderCache, withIntermediateDirectories: true)
     }
 
     private func startSwtpm() async throws {

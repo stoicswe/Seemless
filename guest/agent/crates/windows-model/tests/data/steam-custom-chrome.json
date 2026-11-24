@@ -1,0 +1,25 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Steam-style custom chrome (CEF): frameless resizable main and friends windows, a frameless menu, hidden helpers",
+  "note": "Not captured from a real guest. The Steam client draws its own frame in CEF: windows are WS_POPUP with WS_THICKFRAME and the min/max boxes but no WS_CAPTION, and WS_EX_APPWINDOW for a taskbar button. Menus are unowned frameless topmost tool windows.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x00300520", "class": "SDL_app", "title": "", "style": "0x96000000", "ex_style": "0x00000088", "pid": 11300,
+     "process": "C:\\Program Files (x86)\\Steam\\bin\\cef\\cef.win7x64\\steamwebhelper.exe", "rect": {"x": 200, "y": 64, "w": 420, "h": 520},
+     "expect": "popup", "note": "View menu: unowned frameless popup; not a splash because the process has other windows"},
+    {"hwnd": "0x00300510", "class": "SDL_app", "title": "Friends List", "style": "0x960F0000", "ex_style": "0x00040000", "pid": 11300,
+     "process": "C:\\Program Files (x86)\\Steam\\bin\\cef\\cef.win7x64\\steamwebhelper.exe", "rect": {"x": 1960, "y": 100, "w": 560, "h": 1200},
+     "expect": "normal"},
+    {"hwnd": "0x00300500", "class": "SDL_app", "title": "Steam", "style": "0x960F0000", "ex_style": "0x00040000", "pid": 11300,
+     "process": "C:\\Program Files (x86)\\Steam\\bin\\cef\\cef.win7x64\\steamwebhelper.exe", "rect": {"x": 160, "y": 0, "w": 1760, "h": 1180},
+     "expect": "normal", "note": "frameless but resizable: an app window"},
+    {"hwnd": "0x00300530", "class": "vguiPopupWindow", "title": "", "style": "0x86000000", "ex_style": "0x00000080", "pid": 11200,
+     "process": "C:\\Program Files (x86)\\Steam\\steam.exe", "rect": {"x": 0, "y": 0, "w": 64, "h": 24}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00300534", "class": "Steam", "title": "Steam", "style": "0x04CF0000", "pid": 11200,
+     "process": "C:\\Program Files (x86)\\Steam\\steam.exe", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00300538", "class": "Chrome_WidgetWin_0", "title": "", "style": "0x86CF0000", "pid": 11300,
+     "process": "C:\\Program Files (x86)\\Steam\\bin\\cef\\cef.win7x64\\steamwebhelper.exe", "rect": {"x": 0, "y": 0, "w": 136, "h": 39}, "expect": "ignore:hidden"}
+  ]
+}

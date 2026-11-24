@@ -1,0 +1,26 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Common File Open dialog (#32770) owned by a classic Win32 app (Registry Editor, File > Import), with its tooltip and an address-bar dropdown",
+  "note": "Not captured from a real guest. The IFileOpenDialog window is #32770 owned by the calling window; its tooltips are tooltips_class32 owned by the dialog; most tooltips stay hidden.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x001201E0", "class": "tooltips_class32", "style": "0x94000003", "ex_style": "0x00080088", "pid": 7340,
+     "process": "C:\\Windows\\regedit.exe", "owner": "0x001101D0", "rect": {"x": 1220, "y": 700, "w": 260, "h": 48},
+     "expect": "tooltip", "expect_owner": "0x001101D0"},
+    {"hwnd": "0x001201E4", "class": "ComboLBox", "style": "0x94000000", "ex_style": "0x00000188", "pid": 7340,
+     "process": "C:\\Windows\\regedit.exe", "owner": "0x001101D0", "rect": {"x": 700, "y": 340, "w": 900, "h": 420},
+     "expect": "popup", "expect_owner": "0x001101D0", "note": "address bar dropdown"},
+    {"hwnd": "0x001101D0", "class": "#32770", "title": "Import Registry File", "style": "0x96CC02C4", "ex_style": "0x00010101", "pid": 7340,
+     "process": "C:\\Windows\\regedit.exe", "owner": "0x00100190", "rect": {"x": 560, "y": 260, "w": 1440, "h": 960},
+     "expect": "dialog", "expect_owner": "0x00100190"},
+    {"hwnd": "0x001201E8", "class": "tooltips_class32", "style": "0x84000003", "ex_style": "0x00080088", "pid": 7340,
+     "process": "C:\\Windows\\regedit.exe", "owner": "0x001101D0", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x001201EC", "class": "tooltips_class32", "style": "0x84000003", "ex_style": "0x00080088", "pid": 7340,
+     "process": "C:\\Windows\\regedit.exe", "owner": "0x00100190", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00100190", "class": "RegEdit_RegEdit", "title": "Registry Editor", "style": "0x1ECF0000", "ex_style": "0x00000100", "pid": 7340,
+     "process": "C:\\Windows\\regedit.exe", "rect": {"x": 300, "y": 120, "w": 1960, "h": 1280}, "expect": "normal",
+     "note": "owner of the dialog; disabled (WS_DISABLED) while the modal dialog is open; the classifier does not read that bit"}
+  ]
+}

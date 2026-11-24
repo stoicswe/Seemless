@@ -1,0 +1,31 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Word-style Office app: maximised main window, Font dialog with a nested owned dialog, a ribbon tooltip, hidden helpers",
+  "note": "Not captured from a real guest. Word's main window is OpusApp; classic dialogs are bosa_sdm_msword owned by it; newer ones are NUIDialog; ribbon tooltips and galleries are 'Net UI Tool Window'. The nested dialog's owner is the Font dialog.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x00500730", "class": "Net UI Tool Window", "title": "", "style": "0x96000000", "ex_style": "0x080800A8", "pid": 13300,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "owner": "0x00500700",
+     "rect": {"x": 300, "y": 260, "w": 520, "h": 180}, "expect": "popup", "expect_owner": "0x00500700", "note": "ribbon tooltip"},
+    {"hwnd": "0x00500720", "class": "NUIDialog", "title": "Advanced Typography", "style": "0x96C80284", "ex_style": "0x00010101", "pid": 13300,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "owner": "0x00500710",
+     "rect": {"x": 1000, "y": 520, "w": 760, "h": 560}, "expect": "dialog", "expect_owner": "0x00500710", "note": "dialog owned by a dialog"},
+    {"hwnd": "0x00500710", "class": "bosa_sdm_msword", "title": "Font", "style": "0x9EC80000", "ex_style": "0x00010101", "pid": 13300,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "owner": "0x00500700",
+     "rect": {"x": 860, "y": 380, "w": 900, "h": 900}, "expect": "dialog", "expect_owner": "0x00500700",
+     "note": "disabled while its own child dialog is up"},
+    {"hwnd": "0x00500700", "class": "OpusApp", "title": "Document1 - Word", "style": "0x1FCF0000", "ex_style": "0x00000100", "pid": 13300,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "aumid": "Microsoft.Office.WINWORD.EXE.15",
+     "rect": {"x": 0, "y": 0, "w": 2560, "h": 1504}, "expect": "normal", "note": "maximised, disabled by the modal dialog"},
+    {"hwnd": "0x00500740", "class": "MsoCommandBar", "title": "Ribbon", "style": "0x86000000", "pid": 13300,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "owner": "0x00500700", "rect": {"x": 0, "y": 0, "w": 0, "h": 0},
+     "expect": "ignore:hidden"},
+    {"hwnd": "0x00500744", "class": "OfficePowerManagerWindow", "title": "", "style": "0x84C00000", "pid": 13300,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00500748", "class": "Net UI Tool Window", "title": "", "style": "0x86000000", "ex_style": "0x080800A8", "pid": 13300,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE", "owner": "0x00500700", "rect": {"x": 0, "y": 0, "w": 0, "h": 0},
+     "expect": "ignore:hidden"}
+  ]
+}

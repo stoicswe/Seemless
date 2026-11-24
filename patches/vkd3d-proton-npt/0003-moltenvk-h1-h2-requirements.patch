@@ -1,0 +1,126 @@
+Seemless WP7.5: device requirements MoltenVK cannot meet (S8 H1, H2).
+
+H1: VK_EXT_transform_feedback is no longer required. Metal has no stream
+    output. Pipelines with SO already fail with E_NOTIMPL; SO_STATISTICS
+    query heaps now do too.
+H2: single-texel buffer-view alignment is no longer required when typed
+    views go through the typed offset buffer (no descriptor buffer/heap).
+    vkd3d_create_buffer_view_for_resource moves the view start down to the
+    driver's alignment (MoltenVK: 16 bytes) and adds the remainder to the
+    offset the shader applies to every index. Internal views created
+    directly with vkd3d_create_buffer_view (UAV clears, copies) are not
+    covered yet.
+Licence: LGPL-2.1 (vkd3d-proton).
+
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 4b180e5..c2ccfc1 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -3294,8 +3306,9 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+ 
+     if (!physical_device_info->xfb_properties.transformFeedbackQueries)
+     {
+-        ERR("Lacking support for transform feedback.\n");
+-        return E_INVALIDARG;
++        /* Metal has no stream output (MoltenVK). D3D12 requires it on paper but games
++         * rarely use it: pipelines with SO and SO query heaps fail with E_NOTIMPL. */
++        WARN("Lacking support for transform feedback, stream output is unavailable.\n");
+     }
+ 
+     single_storage_texel =
+@@ -3307,11 +3320,20 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+             physical_device_info->vulkan_1_3_properties.uniformTexelBufferOffsetSingleTexelAlignment ||
+             physical_device_info->vulkan_1_3_properties.uniformTexelBufferOffsetAlignmentBytes == 1;
+ 
+-    if (!single_storage_texel || !single_uniform_texel)
++    /* Descriptor buffers and descriptor heaps place typed views directly, without the
++     * typed offset buffer that can absorb a misaligned start. */
++    if ((!single_storage_texel || !single_uniform_texel) &&
++            (vulkan_info->EXT_descriptor_buffer || vulkan_info->EXT_descriptor_heap))
+     {
+         ERR("Lacking support for single texel alignment.\n");
+         return E_INVALIDARG;
+     }
++    else if (!single_storage_texel || !single_uniform_texel)
++    {
++        /* Typed views are placed at the driver's alignment and the remainder goes
++         * through the typed offset buffer (vkd3d_create_buffer_view_for_resource). */
++        WARN("Lacking single texel alignment, emulating unaligned typed buffer views.\n");
++    }
+ 
+     /* Disable unused Vulkan features. The following features need to remain enabled
+      * for DXVK in order to support D3D11on12: hostQueryReset, vulkanMemoryModel.
+diff --git a/libs/vkd3d/resource.c b/libs/vkd3d/resource.c
+index 4e95f0d..1b1aea0 100644
+--- a/libs/vkd3d/resource.c
++++ b/libs/vkd3d/resource.c
+@@ -5630,6 +5630,27 @@ static DXGI_FORMAT vkd3d_structured_uav_to_texel_buffer_dxgi_format(unsigned int
+     return DXGI_FORMAT_UNKNOWN;
+ }
+ 
++/* Elements of byte_count bytes a texel buffer view's start must be a multiple of.
++ * 1 when the driver allows single-texel offsets (the D3D12 rule). */
++static VkDeviceSize vkd3d_texel_buffer_offset_alignment_elements(struct d3d12_device *device,
++        VkDeviceSize byte_count)
++{
++    const VkPhysicalDeviceVulkan13Properties *props = &device->device_info.vulkan_1_3_properties;
++    VkDeviceSize align = 1, a, b, t;
++
++    if (!props->storageTexelBufferOffsetSingleTexelAlignment)
++        align = max(align, props->storageTexelBufferOffsetAlignmentBytes);
++    if (!props->uniformTexelBufferOffsetSingleTexelAlignment)
++        align = max(align, props->uniformTexelBufferOffsetAlignmentBytes);
++    if (align <= 1 || !byte_count)
++        return 1;
++
++    /* Smallest element count whose byte size is a multiple of align. */
++    for (a = align, b = byte_count; b; t = a % b, a = b, b = t)
++        ;
++    return align / a;
++}
++
+ static bool vkd3d_create_buffer_view_for_resource(struct d3d12_device *device,
+         struct d3d12_resource *resource, DXGI_FORMAT view_format,
+         VkDeviceSize offset, VkDeviceSize size, VkDeviceSize structure_stride,
+@@ -6435,6 +6456,8 @@ static bool vkd3d_buffer_view_get_aligned_view(
+     VkDeviceSize max_resource_elements;
+     VkDeviceSize max_element_headroom;
+     VkDeviceSize element_align;
++    VkDeviceSize texel_align;
++    VkDeviceSize misalign;
+     VkDeviceSize max_elements;
+     VkDeviceSize begin_range;
+     VkDeviceSize end_range;
+@@ -6496,6 +6519,19 @@ static bool vkd3d_buffer_view_get_aligned_view(
+             first_element = begin_range;
+             num_elements = end_range - begin_range;
+         }
++
++        /* Drivers without single-texel offset alignment (MoltenVK: 16 bytes) cannot
++         * create a view at an arbitrary element. Move the view start down to the
++         * driver's alignment and fold the difference into the offset buffer, which
++         * the shader adds to every index (bounds use element_count). */
++        if ((texel_align = vkd3d_texel_buffer_offset_alignment_elements(device,
++                format ? vkd3d_format->byte_count : sizeof(uint32_t))) > 1)
++        {
++            misalign = first_element % texel_align;
++            first_element -= misalign;
++            num_elements += misalign;
++            bound_range->element_offset += misalign;
++        }
+     }
+ 
+     if (!vkd3d_create_buffer_view_for_resource(device, resource, format,
+@@ -10896,6 +10932,12 @@ HRESULT d3d12_query_heap_create(struct d3d12_device *device, const D3D12_QUERY_H
+     VkResult vr;
+     HRESULT hr;
+ 
++    if (desc->Type == D3D12_QUERY_HEAP_TYPE_SO_STATISTICS && !device->vk_info.EXT_transform_feedback)
++    {
++        FIXME("Stream output queries are not supported by the Vulkan implementation.\n");
++        return E_NOTIMPL;
++    }
++
+     if (!(object = vkd3d_calloc(1, sizeof(*object))))
+         return E_OUTOFMEMORY;
+ 

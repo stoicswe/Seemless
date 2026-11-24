@@ -1,0 +1,178 @@
+Seemless WP7.5: VK_EXT_robustness2 robustBufferAccess2 and nullDescriptor
+on Apple GPUs (S8 H3, H4), MoltenVK v1.4.2.
+
+H3: report robustBufferAccess2 on Apple GPUs. MoltenVK already relies on
+    Apple GPUs bounds-checking buffer accesses for robustBufferAccess. Known
+    deviation: the bound is the Metal buffer binding's end, not the exact
+    descriptor range. Size alignments report the spec maxima (4 / 256).
+H4: report nullDescriptor. Null buffer descriptors (argument buffers both
+    modes, CPU-side buffer descriptors, vertex buffers) point at one
+    zero-filled, resident 64 KiB MTLBuffer instead of address 0. Null
+    textures stay nil, which Apple GPUs read as zero. Known deviations:
+    writes through a null UAV land in the shared zero buffer; a null vertex
+    buffer reads (0,0,0,0), not (0,0,0,1).
+Both need a residency set (macOS 15+).
+Licence: Apache-2.0 (MoltenVK).
+
+diff --git a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+index 664276b..91653c7 100644
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdDraw.mm
+@@ -42,6 +42,15 @@
+     MVKVertexMTLBufferBinding b;
+     for (uint32_t bindIdx = 0; bindIdx < bindingCount; bindIdx++) {
+         MVKBuffer* mvkBuffer = (MVKBuffer*)pBuffers[bindIdx];
++        if ( !mvkBuffer ) {
++            // Seemless (nullDescriptor): a null vertex buffer reads the zero buffer.
++            b.mtlBuffer = mvkGetNullDescriptorMTLBuffer();
++            b.offset = 0;
++            b.size = 0;
++            b.stride = pStrides ? (uint32_t)pStrides[bindIdx] : 0;
++            _bindings.push_back(b);
++            continue;
++        }
+         b.mtlBuffer = mvkBuffer->getMTLBuffer();
+         b.offset = mvkBuffer->getMTLBufferOffset() + pOffsets[bindIdx];
+ 		b.size = pSizes ? uint32_t(pSizes[bindIdx] == VK_WHOLE_SIZE ? mvkBuffer->getByteCount() - pOffsets[bindIdx] : pSizes[bindIdx]) : 0;
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm
+index 3cdc623..ca89b5e 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDescriptorSet.mm
+@@ -911,13 +911,18 @@ void setBuffer(id<MTLBuffer> buf, uint64_t offset, size_t index = 0) {
+ 	}
+ 	void setNullTexture(size_t index = 0) { dst[index].resource = {}; }
+ 	void setNullSampler(size_t index = 0) { dst[index].resource = {}; }
+-	void setNullBuffer (size_t index = 0) { dst[index].gpuAddress = 0; }
++	void setNullBuffer (size_t index = 0) {
++		id<MTLBuffer> nullBuf = mvkGetNullDescriptorMTLBuffer();
++		dst[index].gpuAddress = nullBuf ? nullBuf.gpuAddress : 0;
++	}
+ 	void setTexture(MVKImageView* img, size_t index = 0) { setTexture(img ? img->getMTLTexture() : nil, index); }
+ 	void setSampler(MVKSampler* samp, size_t index = 0) { setSampler(samp ? samp->getMTLSamplerState() : nil, index); }
+ 	void setBuffer(const VkDescriptorBufferInfo* info, size_t index = 0) {
+ 		uint64_t addr = 0;
+ 		if (MVKBuffer* buf = reinterpret_cast<MVKBuffer*>(info->buffer))
+ 			addr = buf->getMTLBuffer().gpuAddress + buf->getMTLBufferOffset() + info->offset;
++		else if (id<MTLBuffer> nullBuf = mvkGetNullDescriptorMTLBuffer())
++			addr = nullBuf.gpuAddress;
+ 		dst[index].gpuAddress = addr;
+ 	}
+ };
+@@ -936,12 +941,12 @@ void setBuffer(id<MTLBuffer> buf, uint64_t offset, size_t index = 0) {
+ 	}
+ 	void setNullTexture(size_t index = 0) { [enc setTexture:nil atIndex:base + index]; }
+ 	void setNullSampler(size_t index = 0) { [enc setSamplerState:nil atIndex:base + index]; }
+-	void setNullBuffer (size_t index = 0) { [enc setBuffer:nil offset:0 atIndex:base + index]; }
++	void setNullBuffer (size_t index = 0) { [enc setBuffer:mvkGetNullDescriptorMTLBuffer() offset:0 atIndex:base + index]; }
+ 	void setTexture(MVKImageView* img, size_t index = 0) {
+ 		[enc setTexture:img ? img->getMTLTexture() : nil atIndex:base + index];
+ 	}
+ 	void setBuffer(const VkDescriptorBufferInfo* info, size_t index = 0) {
+-		id<MTLBuffer> mtlbuf = nil;
++		id<MTLBuffer> mtlbuf = mvkGetNullDescriptorMTLBuffer();
+ 		NSUInteger offset = 0;
+ 		if (MVKBuffer* buf = reinterpret_cast<MVKBuffer*>(info->buffer)) {
+ 			mtlbuf = buf->getMTLBuffer();
+@@ -1288,6 +1293,7 @@ static void writeDescriptorSetCPUBuffer(
+ 					desc->meta.buffer = static_cast<uint32_t>(info->range == VK_WHOLE_SIZE ? buf->getByteCount() - info->offset : info->range);
+ 				} else {
+ 					*desc = {};
++					desc->a = mvkGetNullDescriptorMTLBuffer();	// Seemless: null descriptor, size 0
+ 				}
+ 				break;
+ 			}
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.h b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.h
+index 534a414..4b7a85c 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.h
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.h
+@@ -1318,3 +1318,12 @@ NSArray<id<MTLDevice>>* mvkGetAvailableMTLDevicesArray(MVKInstance* instance);
+  * the returned value will be zero.
+  */
+ uint64_t mvkGetLocationID(id<MTLDevice> mtlDevice);
++
++/**
++ * Seemless (VK_EXT_robustness2 nullDescriptor): a zero-filled, resident MTLBuffer
++ * that null buffer descriptors point at, so a shader reading through a null
++ * descriptor reads zeros instead of dereferencing address 0. Sized for the largest
++ * D3D12 constant buffer (64 KiB). Created by the first MVKDevice with a residency
++ * set and added to every such device's set; nil before that.
++ */
++id<MTLBuffer> mvkGetNullDescriptorMTLBuffer();
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+index 9772757..93bd3bd 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKDevice.mm
+@@ -633,9 +633,15 @@
+ 			}
+ 			case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_KHR: {
+ 				auto* robustness2Features = (VkPhysicalDeviceRobustness2FeaturesKHR*)next;
+-				robustness2Features->robustBufferAccess2 = false;
++				// Seemless (H3/H4, WP7.5): Apple GPUs bounds-check buffer accesses against the
++				// bound Metal buffer, which MoltenVK already relies on for robustBufferAccess.
++				// robustBufferAccess2 is reported on that basis; the bound is the buffer
++				// binding's end rather than the exact descriptor range (a known deviation).
++				// Null descriptors are backed by a zero buffer (mvkGetNullDescriptorMTLBuffer)
++				// or a nil texture, which Apple GPUs read as zero.
++				robustness2Features->robustBufferAccess2 = _gpuCapabilities.isAppleGPU && _metalFeatures.residencySets;
+ 				robustness2Features->robustImageAccess2 = _gpuCapabilities.isAppleGPU;
+-				robustness2Features->nullDescriptor = false;
++				robustness2Features->nullDescriptor = _gpuCapabilities.isAppleGPU && _metalFeatures.residencySets;
+ 				break;
+ 			}
+ 			case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FMA_FEATURES_KHR: {
+@@ -1283,8 +1289,10 @@
+ 			case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_PROPERTIES_KHR: {
+ 				// This isn't implemented yet, but when it is, it is expected that we'll wind up doing it manually.
+ 				auto* robustness2Props = (VkPhysicalDeviceRobustness2PropertiesKHR*)next;
+-				robustness2Props->robustStorageBufferAccessSizeAlignment = 1;
+-				robustness2Props->robustUniformBufferAccessSizeAlignment = 1;
++				// Seemless: the Vulkan spec's largest allowed granularities (4 and 256), since
++				// bounds are not checked per descriptor range.
++				robustness2Props->robustStorageBufferAccessSizeAlignment = 4;
++				robustness2Props->robustUniformBufferAccessSizeAlignment = 256;
+ 				break;
+ 			}
+ 			case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_PROPERTIES_EXT: {
+@@ -4909,6 +4917,28 @@ static uint32_t mvkGetEntryProperty(io_registry_entry_t entry, CFStringRef prope
+ 	return _defaultMTLSamplerState;
+ }
+ 
++static std::atomic<id<MTLBuffer>> _mvkNullDescriptorMTLBuffer{nil};
++static std::mutex _mvkNullDescriptorMTLBufferLock;
++
++id<MTLBuffer> mvkGetNullDescriptorMTLBuffer() {
++	return _mvkNullDescriptorMTLBuffer.load(std::memory_order_acquire);
++}
++
++// Created once per process (Apple silicon has one GPU) and never released.
++static id<MTLBuffer> mvkCreateNullDescriptorMTLBuffer(id<MTLDevice> mtlDevice) {
++	lock_guard<mutex> lock(_mvkNullDescriptorMTLBufferLock);
++	id<MTLBuffer> buf = _mvkNullDescriptorMTLBuffer.load(std::memory_order_relaxed);
++	if ( !buf ) {
++		@autoreleasepool {
++			// Shared storage is zero-filled on creation.
++			buf = [mtlDevice newBufferWithLength: 64 * KIBI options: MTLResourceStorageModeShared];	// retained
++			buf.label = @"Seemless null descriptor buffer";
++		}
++		_mvkNullDescriptorMTLBuffer.store(buf, std::memory_order_release);
++	}
++	return buf;
++}
++
+ id<MTLBuffer> MVKDevice::getDummyBlitMTLBuffer() {
+ 	if ( !_dummyBlitMTLBuffer ) {
+ 
+@@ -5462,6 +5492,13 @@ static uint32_t mvkGetEntryProperty(io_registry_entry_t entry, CFStringRef prope
+ 			reportMessage(MVK_CONFIG_LOG_LEVEL_ERROR, "Error allocating residency set: %s", error.description.UTF8String);
+ 		}
+ 		[setDescriptor release];
++
++		// Seemless: the shared zero buffer behind null buffer descriptors (H4).
++		if (_residencySet && _physicalDevice->_gpuCapabilities.isAppleGPU) {
++			if (id<MTLBuffer> nullBuf = mvkCreateNullDescriptorMTLBuffer(_physicalDevice->getMTLDevice())) {
++				makeResident(nullBuf);
++			}
++		}
+ 	}
+ #endif
+ 

@@ -255,6 +255,17 @@ private actor StateLog {
         }
     }
 
+    @Test func guestInfoIsSanitized() {
+        var info = Seemless_V1_GuestInfo()
+        info.osBuild = "Windows\u{1B}[31m 11\n" + String(repeating: "x", count: 1000)
+        info.driverVersions = (0..<100).map { i in .with { $0.name = "d\(i)"; $0.version = "1\u{0}" } }
+        let s = AgentClient.sanitized(info)
+        #expect(s.osBuild.hasPrefix("Windows[31m 11x"))
+        #expect(s.osBuild.unicodeScalars.count == AgentClient.maxGuestInfoText)
+        #expect(s.driverVersions.count == AgentClient.maxGuestInfoDrivers)
+        #expect(s.driverVersions[0].version == "1")
+    }
+
     @Test func scriptedEventsArriveInOrderAndHostMessagesAreSeen() async throws {
         let s = try script("""
             {"steps": [

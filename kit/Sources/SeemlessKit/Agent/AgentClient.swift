@@ -203,7 +203,33 @@ public actor AgentClient {
         guard case .guestInfo(let info) = reply.body else {
             throw AgentError.unexpectedReply(expected: "guestInfo", got: reply.bodyName)
         }
-        return info
+        return Self.sanitized(info)
+    }
+
+    /// Longest GuestInfo string kept, in characters.
+    public static let maxGuestInfoText = 256
+    /// Most driver entries kept from GuestInfo.
+    public static let maxGuestInfoDrivers = 64
+
+    /// The guest is untrusted (docs/06 "Host-side validation rules"):
+    /// GuestInfo strings lose control characters and are capped, and the
+    /// driver list is capped.
+    public static func sanitized(_ info: Seemless_V1_GuestInfo) -> Seemless_V1_GuestInfo {
+        func text(_ s: String) -> String {
+            String(String.UnicodeScalarView(s.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+                .prefix(maxGuestInfoText))
+        }
+        var out = Seemless_V1_GuestInfo()
+        out.osBuild = text(info.osBuild)
+        out.agentVersion = text(info.agentVersion)
+        out.gpuAdapter = text(info.gpuAdapter)
+        out.driverVersions = info.driverVersions.prefix(maxGuestInfoDrivers).map { d in
+            var v = Seemless_V1_DriverVersion()
+            v.name = text(d.name)
+            v.version = text(d.version)
+            return v
+        }
+        return out
     }
 
     public func close() {

@@ -1,0 +1,301 @@
+Seemless WP7.5: native macOS arm64 build of vkd3d-proton (osy neptune a8b7cd4).
+
+Based on spike S8's port (spikes/S8-d3d12-moltenvk/vkd3d-proton-macos.patch),
+without its S8_SOFT_CAPS switch, rebased onto the neptune fork:
+- meson: treat darwin like linux (libdl, pkg-config, installed headers).
+- sonames: no Vulkan loader; load @loader_path/libMoltenVK.dylib directly
+  (VKD3D_VULKAN_LIBRARY overrides) and d3d12core from @loader_path. Fixes
+  upstream's d3d12core soname missing the "lib" prefix.
+- vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR optional (no loader
+  trampoline when MoltenVK is used directly; only called when supported).
+- platform/threads/file/cache: getprogname, pthread_*_np, renamex_np,
+  ftello/fseeko.
+- VK_KHR_portability_enumeration / _subset enabled (MoltenVK is a
+  portability driver).
+- cs_emit_nv_memory_decompression_regions: no atomic on a vector element
+  (MoltenVK's SPIRV-Cross emits MSL Metal rejects; built at device creation).
+Licence: LGPL-2.1 (vkd3d-proton).
+
+diff --git a/include/meson.build b/include/meson.build
+index 45b486d..b7bd4fb 100644
+--- a/include/meson.build
++++ b/include/meson.build
+@@ -27,7 +27,7 @@ foreach idl_file : vkd3d_idl
+   header_file = idl_generator.process(idl_file)
+   vkd3d_header_files += header_file
+ 
+-  if target_machine.system() == 'linux'
++  if target_machine.system() == 'linux' or target_machine.system() == 'darwin'
+     header_name = idl_file.split('.')[0] + '.h'
+     custom_target('install_' + header_name,
+         input : header_file,
+diff --git a/include/private/vkd3d_threads.h b/include/private/vkd3d_threads.h
+index 98ea074..6667b08 100644
+--- a/include/private/vkd3d_threads.h
++++ b/include/private/vkd3d_threads.h
+@@ -304,7 +304,11 @@ static inline void pthread_once(pthread_once_t *once, void (*func)(void))
+ 
+ static inline void vkd3d_set_thread_name(const char *name)
+ {
++#ifdef __APPLE__
++    pthread_setname_np(name);
++#else
+     pthread_setname_np(pthread_self(), name);
++#endif
+ }
+ 
+ typedef struct rwlock
+@@ -353,7 +357,9 @@ static inline int condvar_reltime_init(condvar_reltime_t *cond)
+     int rc;
+ 
+     pthread_condattr_init(&attr);
++#ifndef __APPLE__
+     pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
++#endif
+     rc = pthread_cond_init(&cond->cond, &attr);
+     pthread_condattr_destroy(&attr);
+ 
+@@ -375,6 +381,14 @@ static inline int condvar_reltime_wait_timeout_seconds(condvar_reltime_t *cond,
+     struct timespec ts;
+     int rc;
+ 
++#ifdef __APPLE__
++    ts.tv_sec = seconds;
++    ts.tv_nsec = 0;
++    rc = pthread_cond_timedwait_relative_np(&cond->cond, lock, &ts);
++    if (rc == ETIMEDOUT)
++        return 1;
++    return rc == 0 ? 0 : -1;
++#endif
+     clock_gettime(CLOCK_MONOTONIC, &ts);
+     ts.tv_sec += seconds;
+ 
+@@ -404,6 +418,10 @@ static inline unsigned int vkd3d_get_current_thread_id(void)
+     return GetCurrentThreadId();
+ #elif defined(__linux__)
+     return syscall(__NR_gettid);
++#elif defined(__APPLE__)
++    uint64_t tid = 0;
++    pthread_threadid_np(NULL, &tid);
++    return (unsigned int)tid;
+ #else
+     return 0;
+ #endif
+diff --git a/include/vkd3d_sonames.h b/include/vkd3d_sonames.h
+index 1b56123..4d3a7f8 100644
+--- a/include/vkd3d_sonames.h
++++ b/include/vkd3d_sonames.h
+@@ -28,8 +28,11 @@
+ #define SONAME_LIBVULKAN "libvulkan.so.1"
+ #define SONAME_D3D12CORE "libvkd3d-proton-d3d12core.so"
+ #elif defined(__APPLE__)
+-#define SONAME_LIBVULKAN "libvulkan.1.dylib"
+-#define SONAME_D3D12CORE "vkd3d-proton-d3d12core.dylib"
++/* Seemless: no Vulkan loader; MoltenVK is installed next to these libraries
++ * and used directly (VKD3D_VULKAN_LIBRARY overrides, e.g. a loader + ICD).
++ * @loader_path resolves against the dlopen caller's directory. */
++#define SONAME_LIBVULKAN "@loader_path/libMoltenVK.dylib"
++#define SONAME_D3D12CORE "@loader_path/libvkd3d-proton-d3d12core.dylib"
+ #else
+ #error "Unrecognized platform."
+ #endif
+diff --git a/libs/d3d12core/main.c b/libs/d3d12core/main.c
+index fa299e3..def0c58 100644
+--- a/libs/d3d12core/main.c
++++ b/libs/d3d12core/main.c
+@@ -357,6 +357,12 @@ static void load_modules_once(void)
+                 vulkan_module = NULL;
+             }
+         }
++#elif defined(__APPLE__)
++        const char *vulkan_library = getenv("VKD3D_VULKAN_LIBRARY");
++        vulkan_module = dlopen(vulkan_library && *vulkan_library ? vulkan_library : SONAME_LIBVULKAN, RTLD_LAZY);
++        if (!vulkan_module)
++            ERR("Failed to load Vulkan: %s.\n", dlerror());
++        vulkan_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(vulkan_module, "vkGetInstanceProcAddr");
+ #else
+         vulkan_module = dlopen(SONAME_LIBVULKAN, RTLD_LAZY);
+         vulkan_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(vulkan_module, "vkGetInstanceProcAddr");
+diff --git a/libs/vkd3d-common/file_utils.c b/libs/vkd3d-common/file_utils.c
+index 2eb31fd..c03d07f 100644
+--- a/libs/vkd3d-common/file_utils.c
++++ b/libs/vkd3d-common/file_utils.c
+@@ -64,9 +64,13 @@ bool vkd3d_file_rename_no_replace(const char *from_path, const char *to_path)
+     if (!MoveFileA(from_path, to_path))
+         code = GetLastError();
+     return code == ERROR_SUCCESS;
++#else
++#ifdef __APPLE__
++    return renamex_np(from_path, to_path, RENAME_EXCL) == 0;
+ #else
+     return renameat2(AT_FDCWD, from_path, AT_FDCWD, to_path, RENAME_NOREPLACE) == 0;
+ #endif
++#endif
+ }
+ 
+ bool vkd3d_file_delete(const char *path)
+diff --git a/libs/vkd3d-common/platform.c b/libs/vkd3d-common/platform.c
+index 088784f..2addb0b 100644
+--- a/libs/vkd3d-common/platform.c
++++ b/libs/vkd3d-common/platform.c
+@@ -36,7 +36,7 @@ static bool vkd3d_parse_linux_release(const char *release, uint32_t *major, uint
+         return false;
+ }
+ 
+-#if defined(__linux__)
++#if defined(__linux__) || defined(__APPLE__)
+ 
+ # include <dlfcn.h>
+ # include <errno.h>
+@@ -66,6 +66,9 @@ bool vkd3d_get_program_name(char program_name[VKD3D_PATH_MAX])
+ {
+     char *name, *p, *real_path = NULL;
+ 
++#ifdef __APPLE__
++    name = (char *)getprogname();
++#else
+     if ((name = strrchr(program_invocation_name, '/')))
+     {
+         real_path = realpath("/proc/self/exe", NULL);
+@@ -87,6 +90,7 @@ bool vkd3d_get_program_name(char program_name[VKD3D_PATH_MAX])
+     {
+         name = program_invocation_name;
+     }
++#endif
+ 
+     strncpy(program_name, name, VKD3D_PATH_MAX);
+     program_name[VKD3D_PATH_MAX - 1] = '\0';
+diff --git a/libs/vkd3d/cache.c b/libs/vkd3d/cache.c
+index 14a5755..3c6985b 100644
+--- a/libs/vkd3d/cache.c
++++ b/libs/vkd3d/cache.c
+@@ -20,6 +20,10 @@
+ #define VKD3D_DBG_CHANNEL VKD3D_DBG_CHANNEL_API
+ 
+ #include "vkd3d_private.h"
++#ifdef __APPLE__
++#define ftello64 ftello
++#define fseeko64 fseeko
++#endif
+ #include "vkd3d_shader.h"
+ 
+ struct vkd3d_cached_pipeline_key
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 4b180e5..c2ccfc1 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -61,6 +61,10 @@ static const struct vkd3d_optional_extension_info optional_instance_extensions[]
+ {
+     /* EXT extensions */
+     VK_EXTENSION_COND(EXT_DEBUG_UTILS, EXT_debug_utils, VKD3D_CONFIG_FLAG_INIT_STATIC(.DEBUG_UTILS = 1, .FAULT = 1)),
++#ifdef __APPLE__
++    /* MoltenVK is a portability driver: without this the loader hides it. */
++    VK_EXTENSION(KHR_PORTABILITY_ENUMERATION, KHR_portability_enumeration),
++#endif
+ };
+ 
+ static const struct vkd3d_optional_extension_info optional_device_extensions[] =
+@@ -167,6 +171,10 @@ static const struct vkd3d_optional_extension_info optional_device_extensions[] =
+     VK_EXTENSION(VALVE_SHADER_MIXED_FLOAT_DOT_PRODUCT, VALVE_shader_mixed_float_dot_product),
+     /* MESA extensions */
+     VK_EXTENSION(MESA_IMAGE_ALIGNMENT_CONTROL, MESA_image_alignment_control),
++#ifdef __APPLE__
++    /* Must be enabled when a portability driver (MoltenVK) exposes it. */
++    {"VK_KHR_portability_subset", offsetof(struct vkd3d_vulkan_info, KHR_portability_subset), VKD3D_CONFIG_FLAGS_NONE, VKD3D_CONFIG_FLAGS_NONE},
++#endif
+ };
+ 
+ static const struct vkd3d_optional_extension_info optional_extensions_user[] =
+@@ -1510,6 +1518,10 @@ static HRESULT vkd3d_instance_init(struct vkd3d_instance *instance,
+             create_info->optional_instance_extension_count,
+             user_extension_supported, &instance->vk_info);
+     instance_info.ppEnabledExtensionNames = extensions;
++#ifdef __APPLE__
++    if (instance->vk_info.KHR_portability_enumeration)
++        instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
++#endif
+     vkd3d_free(user_extension_supported);
+ 
+     if (VKD3D_CONFIG_FLAG_IS_SET(VULKAN_DEBUG))
+diff --git a/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp b/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp
+index 2978f0b..918c5ea 100644
+--- a/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp
++++ b/libs/vkd3d/shaders/cs_emit_nv_memory_decompression_regions.comp
+@@ -43,7 +43,9 @@ struct memory_region_t {
+ 
+ layout(buffer_reference, scalar)
+ buffer memory_regions_t {
+-  uvec3 region_count;
++  uint  region_count_x; /* S8: SPIRV-Cross cannot take atomics on a vector element */
++  uint  region_count_y;
++  uint  region_count_z;
+   uint  reserved;
+   memory_region_t memory_regions[];
+ };
+@@ -102,7 +104,7 @@ void main() {
+ 
+   // Allocate an output region structure from the scratch buffer
+   memory_regions_t region_buffer = memory_regions_t(scratch_buffer);
+-  uint out_index = atomicAdd(region_buffer.region_count.x, 1);
++  uint out_index = atomicAdd(region_buffer.region_count_x, 1);
+ 
+   // Compute absolute VAs for vkCmdDecompressMemoryIndirectCountNV
+   region_buffer.memory_regions[out_index] = memory_region_t(
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 2d6880d..50c3cdd 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -127,6 +127,8 @@ struct vkd3d_vulkan_info
+ {
+     /* EXT instance extensions */
+     bool EXT_debug_utils;
++    bool KHR_portability_enumeration;
++    bool KHR_portability_subset;
+ 
+     /* KHR device extensions */
+     bool KHR_push_descriptor;
+diff --git a/libs/vkd3d/vulkan_procs.h b/libs/vkd3d/vulkan_procs.h
+index 9e0a736..c24984f 100644
+--- a/libs/vkd3d/vulkan_procs.h
++++ b/libs/vkd3d/vulkan_procs.h
+@@ -416,7 +416,8 @@ VK_DEVICE_EXT_PFN(vkGetLatencyTimingsNV)
+ VK_DEVICE_EXT_PFN(vkQueueNotifyOutOfBandNV)
+ 
+ /* VK_KHR_cooperative_matrix */
+-VK_INSTANCE_PFN(vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)
++/* Optional: without a Vulkan loader (MoltenVK used directly) there is no trampoline. */
++VK_INSTANCE_EXT_PFN(vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)
+ 
+ /* VK_AMD_anti_lag */
+ VK_DEVICE_EXT_PFN(vkAntiLagUpdateAMD)
+diff --git a/meson.build b/meson.build
+index 2c08644..84fc976 100644
+--- a/meson.build
++++ b/meson.build
+@@ -89,7 +89,7 @@ glsl_generator = generator(glsl_compiler,
+ 
+ threads_dep = dependency('threads')
+ 
+-if vkd3d_platform == 'linux'
++if vkd3d_platform == 'linux' or vkd3d_platform == 'darwin'
+   lib_dl           = vkd3d_compiler.find_library('dl')
+   vkd3d_extra_libs = [ lib_dl, threads_dep ]
+ elif vkd3d_platform == 'windows'
+@@ -130,7 +130,7 @@ if cpu_family == 'x86'
+ 
+   # Need to link against libatomic for 64-bit atomic emulation on x86
+   # when using clang.
+-  if vkd3d_platform == 'linux'
++  if vkd3d_platform == 'linux' or vkd3d_platform == 'darwin'
+     if vkd3d_is_clang
+       lib_atomic = vkd3d_compiler.find_library('atomic')
+       vkd3d_extra_libs += lib_atomic
+@@ -198,7 +198,7 @@ else
+   lib_d3d12 = d3d12_dep
+ endif
+ 
+-if vkd3d_platform == 'linux'
++if vkd3d_platform == 'linux' or vkd3d_platform == 'darwin'
+   pkg = import('pkgconfig')
+   pkg.generate(d3d12_lib, filebase : 'libvkd3d-proton-d3d12', subdirs : 'vkd3d-proton', description : 'The vkd3d-proton D3D12 implementation')
+   install_headers('include/vkd3d_vk_includes.h', 'include/vkd3d_types.h', 'include/vkd3d_win32.h', 'include/vkd3d_windows.h', 'include/vkd3d_native_shared.h', subdir : 'vkd3d-proton')

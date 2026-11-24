@@ -106,7 +106,7 @@ struct VMCommands: Commands {
                 .disabled(!idle)
             Button("Start from Installer Media") { model.start(name, keys: .cdPrompt) }
                 .disabled(!idle || item?.config.media.isEmpty != false)
-            Button("Start without Window") { model.start(name, exportDisplay: true) }
+            Button("Start in QEMU Window") { model.start(name, qemuWindow: true) }
                 .disabled(!idle)
             Divider()
             Button(state == .paused ? "Resume" : "Pause") {
@@ -135,6 +135,43 @@ struct VMCommands: Commands {
                 .disabled(!(item?.status.isActive ?? false))
             Button("Show in Finder") { model.revealInFinder(name) }
                 .disabled(item == nil)
+        }
+        CommandMenu("Display") { DisplayMenu(model: model) }
+    }
+}
+
+/// The desktop window's menu (WP3.2): keys a Mac keyboard cannot send,
+/// full screen, scaling and keyboard style for the active VM's window.
+struct DisplayMenu: View {
+    var model: AppModel
+
+    var body: some View {
+        let session = model.activeDesktop
+        let name = session?.vm ?? model.selection
+        Menu("Send Keys") {
+            ForEach(GuestKeyCombo.allCases, id: \.self) { combo in
+                Button(combo.title) { model.send(combo) }
+            }
+        }
+        .disabled(session == nil)
+        Button(session?.isFullScreen == true ? "Exit Full Screen" : "Enter Full Screen") { model.toggleFullScreen() }
+            .disabled(session == nil)
+        Divider()
+        if let name {
+            let prefs = model.displayPreferences(name)
+            Picker("Scaling", selection: Binding(get: { prefs.scaling }, set: { v in
+                var p = prefs; p.scaling = v; model.setDisplayPreferences(name, p)
+            })) {
+                ForEach(DisplayScaling.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            Picker("Keyboard", selection: Binding(get: { prefs.keyboard }, set: { v in
+                var p = prefs; p.keyboard = v; model.setDisplayPreferences(name, p)
+            })) {
+                ForEach(KeyboardStyle.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            Toggle("Resize Windows with the Window", isOn: Binding(get: { prefs.resizeGuest }, set: { v in
+                var p = prefs; p.resizeGuest = v; model.setDisplayPreferences(name, p)
+            }))
         }
     }
 }

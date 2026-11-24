@@ -30,8 +30,9 @@ and shows each Windows window as a native Mac window. The plan lives in
 - GPL code (QEMU) stays in `vendor/` and `patches/`; never copy it into
   `kit/`, `app/` or `guest/`.
 - Keep QEMU patches small and outside virtio-gpu/Neptune code.
-- Graphics bugs: reproduce in UTM with the same pinned versions first; fix
-  upstream if it reproduces there.
+- Graphics bugs: reproduce in UTM with the same pinned versions first when
+  possible. Fixes stay local in `patches/` for this project; nothing is sent
+  upstream (owner, 2026-11-24).
 - No performance change without before/after numbers from `seemlessctl bench`.
 - You cannot see the screen: use `seemlessctl screenshot` and agent
   diagnostics to verify visual results, and say so when something was not
@@ -71,6 +72,16 @@ and shows each Windows window as a native Mac window. The plan lives in
   `SEEMLESS_ROOT=<dir>` for a throwaway root; `SEEMLESS_OPEN=new-vm`
   (`-automatic`, `-about`) opens the New VM sheet for screenshots. Screenshot its window with
   `screencapture -x -o -l <windowid>` (window id via CGWindowListCopyWindowInfo).
+- Release app (P1, WP8.1/8.2/8.5; runbook `docs/release.md`):
+  `scripts/package-release.sh` → `build/release/` (self-contained
+  `Seemless.app`, dmg, zip; audit, ad-hoc signing without
+  `SEEMLESS_SIGN_IDENTITY`, notarization with `SEEMLESS_NOTARY_PROFILE`).
+  `--allow-newer-minos` for local tests while Homebrew's libraries need
+  macOS 27. `scripts/release/source-archive.sh` writes the source offer.
+  The app and `seemlessctl` inside a bundle use the bundled stack
+  (`HostStack.locate()`); test relocated bundles under `sandbox-exec`
+  denying `build/prefix` and `/opt/homebrew` rather than renaming the
+  prefix other sessions use.
 - Windows image (M2): `seemlessctl image inspect <iso>`, `image build --iso`,
   `image payload --out`, `image result`. Runbook: `docs/testing/first-iso.md`.
 - Agent protocol (M4): schema `proto/seemless.proto`; after editing it run
@@ -95,6 +106,23 @@ and shows each Windows window as a native Mac window. The plan lives in
   `proto/mock/zen-guest-helper.ps1` in the guest (needs the guest's network)
   and `mock-agent --script proto/mock/notepad-live.json`. Test list and
   results: `docs/testing/seamless.md`.
+- Desktop mode and first run (P2, `docs/testing/desktop-mode.md`): the app
+  starts VMs exported and opens its desktop window. `SEEMLESS_OPEN=welcome`
+  shows the first-run flow; `SEEMLESS_FIRSTRUN_ISO=<iso>`,
+  `SEEMLESS_FIRSTRUN_PROFILE=lean|leanXbox|fat`, `SEEMLESS_FIRSTRUN_GO=1`
+  run it without clicks. Desktop window switches: `SEEMLESS_DISPLAY_RESIZE=WxH`
+  (points), `_FULLSCREEN=1`, `_KEYS=ctrlAltDelete` (any `GuestKeyCombo`),
+  `_TYPE` now takes `{cmd}`, `{cmd+a}`, `{shift+h}`, `{ret}`, `{wait}`;
+  `_LOG=1` logs size requests. Guest drivers for installs:
+  `$SEEMLESS_GUEST_DRIVERS`, the bundle's `Resources/guest-drivers`, or
+  `build/guest-drivers` (viogpu3d + netkvm + vioserial copied from
+  `build/s3/drivers` and `build/wp42/drivers`). Per-VM display settings:
+  `vms/<name>/display.json`.
+- D3D12 backend (WP7.5): `scripts/build-deps.sh moltenvk vkd3d`, then
+  `scripts/d3d12-host/build.sh` and `build/wp75/bin/d3d12hosttest
+  build/prefix/lib/libvkd3d-proton-d3d12.dylib` (ladder rungs 1–3 on the
+  host); `guest/tools/d3d12test/build.sh` builds the guest test exe.
+  Runbook: `docs/spikes/WP7.5-d3d12-host-backend.md`.
 - Tests: `swift test --package-path kit` (integration tests boot real QEMU to
   firmware; they skip themselves if `build/prefix` is missing).
 - Smoke-boot the stack: `scripts/smoke-qemu.sh` (headless) or `--window`

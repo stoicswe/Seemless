@@ -1,0 +1,31 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Visual Studio Code (Electron): main window with custom title bar, a native tooltip widget, Chromium's hidden helper windows, an off-screen helper",
+  "note": "Not captured from a real guest. Chromium names every top-level widget Chrome_WidgetWin_N; app windows keep WS_CAPTION with a custom-drawn title bar; tooltips and bubbles are no-activate tool windows; many hidden message windows exist per process.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x00200410", "class": "Chrome_WidgetWin_1", "title": "", "style": "0x96000000", "ex_style": "0x080800A8", "pid": 10240,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", "owner": "0x00200400",
+     "rect": {"x": 820, "y": 140, "w": 300, "h": 56}, "expect": "popup", "expect_owner": "0x00200400",
+     "note": "tooltip bubble (no-activate, layered, click-through): a popup, since its class does not say tooltip"},
+    {"hwnd": "0x00200400", "class": "Chrome_WidgetWin_1", "title": "Welcome - Visual Studio Code", "style": "0x16CF0000", "ex_style": "0x00000100", "pid": 10240,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", "aumid": "Microsoft.VisualStudioCode",
+     "rect": {"x": 160, "y": 80, "w": 2200, "h": 1360}, "expect": "normal"},
+    {"hwnd": "0x00200420", "class": "Chrome_WidgetWin_0", "title": "", "style": "0x86CF0000", "pid": 10240,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", "rect": {"x": 0, "y": 0, "w": 136, "h": 39}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00200424", "class": "Chrome_SystemMessageWindow", "title": "", "style": "0x84CF0000", "pid": 10240,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", "rect": {"x": 0, "y": 0, "w": 136, "h": 39}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00200428", "class": "Chrome_WidgetWin_0", "title": "", "style": "0x86CF0000", "pid": 10388,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", "rect": {"x": 0, "y": 0, "w": 136, "h": 39}, "expect": "ignore:hidden"},
+    {"hwnd": "0x0020042C", "class": "Chrome_WidgetWin_1", "title": "", "style": "0x96000000", "ex_style": "0x00000088", "pid": 10240,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+     "rect": {"x": -4000, "y": -4000, "w": 1, "h": 1}, "expect": "ignore:offscreen", "note": "visible helper widget parked off-screen"},
+    {"hwnd": "0x00200430", "class": "Chrome_WidgetWin_1", "title": "", "style": "0x96000000", "ex_style": "0x00000088", "pid": 10240,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+     "rect": {"x": 900, "y": 500, "w": 0, "h": 0}, "expect": "ignore:empty", "note": "visible but zero-size widget"},
+    {"hwnd": "0x00200434", "class": "CicMarshalWndClass", "title": "CicMarshalWnd", "style": "0x84000000", "pid": 10240,
+     "process": "C:\\Users\\Seemless\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"}
+  ]
+}

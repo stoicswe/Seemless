@@ -131,8 +131,8 @@ private struct ControlCluster: View {
                             .disabled(item.config.media.isEmpty)
                         Button("Start Paused", systemImage: "pause") { model.start(name, paused: true) }
                         Divider()
-                        Button("Start without Window", systemImage: "camera.viewfinder") { model.start(name, exportDisplay: true) }
-                            .help("No QEMU window; screenshots also work once the 3D driver is loaded")
+                        Button("Start in QEMU Window", systemImage: "macwindow") { model.start(name, qemuWindow: true) }
+                            .help("QEMU's own window instead of the Seemless window (troubleshooting)")
                     } label: {
                         Image(systemName: "chevron.down")
                     }
@@ -462,35 +462,122 @@ private struct BuildSection: View {
         GlassSection("Automatic Install", symbol: "wand.and.stars") {
             switch progress.outcome {
             case .running:
-                ProgressView().controlSize(.small)
+                Button("Watch", systemImage: "display") { model.showDisplay(name) }
+                    .buttonStyle(.glass).controlSize(.small)
+                    .disabled(progress.phase != .installing)
+                    .help("Show the install in a window. Seemless needs no input; you can just wait.")
             default:
                 Button("Dismiss") { model.dismissBuild(name) }
             }
         } content: {
-            VStack(alignment: .leading, spacing: 10) {
-                switch progress.outcome {
-                case .running:
-                    Text("Windows is installing by itself in the QEMU window (about 5 minutes); the VM shuts down when it is done. On the first start, Windows shows Microsoft’s licence page unless you accepted it when creating the VM.")
-                        .font(.callout).foregroundStyle(.secondary)
-                case .finished(let status, let dir, let timedOut):
-                    Label(progress.succeeded ? "Windows is installed. Start the VM to use it."
-                                             : "Install ended with status \(status ?? "none")\(timedOut ? " (timed out)" : "").",
-                          systemImage: progress.succeeded ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(progress.succeeded ? .green : .orange)
-                    Button("Open Install Logs") { NSWorkspace.shared.open(dir) }
-                        .buttonStyle(.glass).controlSize(.small)
-                case .failed(let message):
-                    Label(message, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+            BuildProgressView(progress: progress, logHeight: 120)
+        }
+    }
+}
+
+/// Staged progress of an automatic install, used by the library and the
+/// first-run flow.
+struct BuildProgressView: View {
+    var progress: BuildProgress
+    var logHeight: CGFloat
+    @State private var showLog = false
+
+    private static let stages: [(ImageBuilder.Phase, String)] = [
+        (.checkingMedia, "Check the Windows ISO"),
+        (.preparing, "Create the VM and its setup disk"),
+        (.installing, "Install Windows (about 5–15 minutes)"),
+        (.finishing, "Finish"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(Self.stages.enumerated()), id: \.offset) { i, stage in
+                HStack(spacing: 8) {
+                    stageIcon(i)
+                        .frame(width: 18)
+                    Text(stage.1)
+                        .foregroundStyle(state(i) == .pending ? .secondary : .primary)
+                    if stage.0 == .installing, state(i) == .active {
+                        TimelineView(.periodic(from: .now, by: 1)) { _ in
+                            Text(detailLine).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                    }
                 }
+            }
+            switch progress.outcome {
+            case .running:
+                if !progress.hasDrivers {
+                    Label("No 3D graphics driver found: Windows installs with basic graphics.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            case .finished(let status, let dir, let timedOut):
+                if progress.succeeded {
+                    Label("Windows is installed. It starts in its own window: accept Microsoft’s licence there.",
+                          systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    Label(failureText(status: status, timedOut: timedOut), systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Open Install Logs") { NSWorkspace.shared.open(dir) }
+                    .buttonStyle(.glass).controlSize(.small)
+            case .failed(let message):
+                Label(message, systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            DisclosureGroup("Details", isExpanded: $showLog) {
                 ScrollView {
                     Text(progress.lines.joined(separator: "\n"))
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 120)
+                .frame(maxHeight: logHeight)
                 .defaultScrollAnchor(.bottom)
             }
+            .font(.callout)
         }
+    }
+
+    private enum StageState { case done, active, pending, failed }
+
+    private func state(_ i: Int) -> StageState {
+        let current = progress.phase.flatMap { p in Self.stages.firstIndex { $0.0 == p } } ?? -1
+        switch progress.outcome {
+        case .running:
+            return i < current ? .done : i == current ? .active : .pending
+        case .finished:
+            if progress.succeeded { return .done }
+            return i < Self.stages.count - 1 ? .done : .failed
+        case .failed:
+            return i < current ? .done : i == max(current, 0) ? .failed : .pending
+        }
+    }
+
+    @ViewBuilder
+    private func stageIcon(_ i: Int) -> some View {
+        switch state(i) {
+        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .active: ProgressView().controlSize(.small)
+        case .pending: Image(systemName: "circle").foregroundStyle(.tertiary)
+        case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+        }
+    }
+
+    private var detailLine: String {
+        let elapsed = Int(Date().timeIntervalSince(progress.started))
+        let written = ByteCountFormatter.string(fromByteCount: progress.diskBytes, countStyle: .file)
+        return String(format: "%d:%02d · %@ written", elapsed / 60, elapsed % 60, written)
+    }
+
+    private func failureText(status: String?, timedOut: Bool) -> String {
+        if timedOut { return "Windows Setup did not finish in time, so the VM was turned off. The install logs say how far it got." }
+        guard let status else {
+            return "Windows Setup never started from the ISO. Check that it is a Windows 11 ARM64 ISO, then delete this VM and try again."
+        }
+        if status.hasPrefix("ERROR") { return "Windows Setup reported an error (\(status)). The install logs have the details." }
+        return "Install ended with status \(status)."
     }
 }

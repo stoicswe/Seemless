@@ -38,6 +38,34 @@ drive it.
 5. Finish: launcher opens with the discovered apps; offer to install common
    launchers (Steam etc.) via winget.
 
+**As built (WP3.4, Preview 1 P2, 2026-11-24):** `app/Seemless/WelcomeView.swift`
+fills the window when the library is empty at launch (and from "Set Up
+Windows…" on the empty library).
+
+1. **Requirements** (`FirstRun.requirements`, kit): Apple silicon (not under
+   Rosetta), macOS 26+, 25 GB free on the storage volume, the bundled
+   components (QEMU stack, `image/` assets), the 3D guest driver (a warning
+   only: without it Windows installs with basic graphics), and the user's
+   own ISO with a link to Microsoft's download page. Seemless never ships or
+   downloads Windows.
+2. **ISO and profile:** drop or choose the ISO (inspected; Pro or the first
+   supported edition), a required profile, the local account name. CPU,
+   memory and disk use the defaults (changed later in Settings).
+3. **Install:** `ImageBuilder` with the guest drivers (`GuestDrivers.locate`:
+   `$SEEMLESS_GUEST_DRIVERS`, the bundle's `Resources/guest-drivers`, or
+   `build/guest-drivers`) and an exported display (no QEMU window; "Watch
+   the Install" opens it). Four stages from `ImageBuilder.Phase`, elapsed
+   time and bytes written, a collapsible log, and plain-language errors with
+   "Delete and Start Over".
+4. **First start:** on success the VM starts in its desktop window with a
+   bar explaining that Windows shows Microsoft's licence terms and that the
+   person accepts them there. **The licence is never accepted by the app:**
+   the welcome flow and the New VM sheet always build with the licence page
+   shown (the sheet's "accept now" toggle is gone; only `seemlessctl image
+   build --accept-windows-license` can skip it).
+
+Not built: cancel/resume per stage, a shared folder choice, the launcher.
+
 ### Daily use
 
 - Clicking the Dock icon or the hotkey opens the launcher. If the VM is
@@ -77,6 +105,26 @@ cropped to the extended frame so only the macOS shadow shows.
 | Game mode | No remapping; all keys including Cmd go to the guest except the release shortcut (Ctrl-Option-Cmd or user-defined) |
 | Text input / IME | v1: guest IME only (user types with Windows IME for CJK). v2: host IME via `NSTextInputClient` and Unicode injection (`SendInput` `KEYEVENTF_UNICODE` through the agent). Dead keys follow the same split |
 | Stuck keys | On key-window loss, send key-up for everything held |
+
+**As built for desktop mode (WP3.2, `KeyboardTranslator` in the kit):**
+
+- Mac style (default): Command held sends nothing until a key is pressed
+  with it; then the guest gets **right** Ctrl (never colliding with the real
+  left Control) plus the key, for every key that is not reserved.
+  Cmd-Left/Right → Home/End, Cmd-Up/Down → Ctrl-Home/End. Command pressed
+  and released alone is a Windows-key tap (Start). AppKit drops key-ups
+  while Command is held, so the window catches them with a local event
+  monitor, and any key pressed with Command is released at the latest when
+  Command goes up.
+- PC style: Command is the Windows key; nothing is remapped.
+- Reserved for macOS in both styles (go to the menus): Cmd-Q, Cmd-H,
+  Cmd-Option-H, Cmd-M, Cmd-`, Cmd-, , Ctrl-Cmd-F, Cmd-Option-Esc (Cmd-Tab
+  and Cmd-Space never reach the app). The app's own Cmd shortcuts (Cmd-R,
+  Cmd-N, …) go to Windows while the desktop window is key.
+- Display ▸ Send Keys: Ctrl-Alt-Delete, Ctrl-Shift-Esc, Alt-Tab, Alt-F4,
+  Windows, Windows-L, Print Screen (`GuestKeyCombo`).
+- The style is per VM (Display ▸ Keyboard, stored in `display.json`).
+  Cmd-Q → Alt-F4 and game mode are not built.
 
 ## Pointer
 

@@ -50,6 +50,18 @@ public struct ImageBuilder: Sendable {
         }
     }
 
+    /// Coarse stages for progress UIs (the log lines carry the detail).
+    public enum Phase: String, Sendable, CaseIterable {
+        /// Reading the ISO and choosing the edition.
+        case checkingMedia
+        /// Creating the VM, the Windows account and the setup disk.
+        case preparing
+        /// The VM is running Windows Setup and its first boot (5–15 minutes).
+        case installing
+        /// The VM powered off; reading the result.
+        case finishing
+    }
+
     public var layout: StorageLayout
     public var stack: HostStack
     public var assets: ImageAssets
@@ -60,14 +72,17 @@ public struct ImageBuilder: Sendable {
         self.assets = assets
     }
 
-    public func build(_ request: Request, log: @Sendable (String) -> Void) async throws -> Report {
+    public func build(_ request: Request, phase: @Sendable (Phase) -> Void = { _ in },
+                      log: @Sendable (String) -> Void) async throws -> Report {
         let start = ContinuousClock.now
+        phase(.checkingMedia)
 
         log("inspecting \(request.iso.lastPathComponent)")
         let inspection = try await ISOMedia.inspect(request.iso)
         let image = try choose(from: inspection.wim, index: request.imageIndex)
         log("edition: \(image.name) (index \(image.index), build \(image.build).\(image.spBuild), \(image.architecture), \(image.defaultLanguage ?? image.languages.first ?? "?"))")
 
+        phase(.preparing)
         let store = VMStore(layout: layout, stack: stack)
         guard !store.exists(request.vm.name) else { throw BuildError.vmExists(request.vm.name) }
         let files = try await store.create(request.vm)
@@ -110,6 +125,7 @@ public struct ImageBuilder: Sendable {
         // The system disk is empty on this boot, so pressing Space at the
         // CD prompt (BootKeys.cdPrompt) cannot pick the wrong device.
         try await vm.start()
+        phase(.installing)
         log("VM started (QEMU pid \(await vm.qemuPID ?? 0)); booting Windows Setup")
 
         let finished = await vm.waitForExit(timeout: request.timeout)
@@ -119,6 +135,7 @@ public struct ImageBuilder: Sendable {
         }
         let state = await vm.state
         log("VM stopped: \(state)")
+        phase(.finishing)
 
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         let resultDir = files.logs.appending(path: "image-build-\(stamp)", directoryHint: .isDirectory)

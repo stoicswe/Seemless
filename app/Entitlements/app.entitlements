@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Seemless.app main executable and the other helpers (qemu-img, swtpm,
+     virgl_render_server, seemlessctl): hardened runtime, no exceptions.
+     The app does not use Hypervisor.framework itself; QEMU does. -->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

@@ -10,6 +10,8 @@ struct ContentView: View {
             switch model.environment {
             case .stackMissing(let missing):
                 StackMissingView(missing: missing)
+            case .ready where model.showingWelcome:
+                WelcomeView()
             case .ready:
                 NavigationSplitView {
                     SidebarView()
@@ -149,9 +151,13 @@ struct EmptyLibraryView: View {
                 .font(.title2.weight(.semibold))
             Text("Create one from a Windows 11 ARM64 ISO.")
                 .foregroundStyle(.secondary)
-            Button("New Virtual Machine…") { model.showingNewVM = true }
-                .buttonStyle(.glassProminent)
-                .controlSize(.large)
+            HStack {
+                Button("Set Up Windows…") { model.showingWelcome = true }
+                    .buttonStyle(.glassProminent)
+                Button("New Virtual Machine…") { model.showingNewVM = true }
+                    .buttonStyle(.glass)
+            }
+            .controlSize(.large)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(WindowBackdrop(tint: .accentColor))

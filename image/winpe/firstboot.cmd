@@ -3,7 +3,7 @@ rem ==========================================================================
 rem Seemless first boot (docs/03 stage 6). Runs as SYSTEM from SetupComplete.cmd.
 rem
 rem Records success on the payload disk and shuts down, so the host knows the
-rem install has finished. Later stages (runtimes, agent service, seal) are
+rem install has finished. Later stages (runtimes, seal) are
 rem added here as they are built.
 rem
 rem S4 (build 26300): this runs BEFORE OOBE. It must not delete
@@ -49,6 +49,16 @@ echo registering launcher
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramData%\Seemless\register-launcher.ps1" -Source "%ProgramData%\Seemless"
 echo register-launcher exit %ERRORLEVEL%
 
+rem Guest agent service (docs/06). apply.cmd copied the agent folder (image
+rem build --agent) to Program Files\Seemless; install.cmd registers the
+rem SeemlessAgent service, which starts on every boot from now on.
+set "AGENT_OK=1"
+if exist "%ProgramFiles%\Seemless\install.cmd" (
+  echo installing agent service
+  call "%ProgramFiles%\Seemless\install.cmd"
+  if errorlevel 1 (echo agent install failed& set "AGENT_OK=")
+)
+
 if defined P (
   set "R=%P%\seemless\result"
   ver > "%P%\seemless\result\firstboot.txt"
@@ -59,6 +69,8 @@ if defined P (
     echo ERROR account setup-account.ps1 failed, see firstboot.log> "%P%\seemless\result\status.txt"
   ) else if not defined FASTSTARTUP_OK (
     echo ERROR faststartup HiberbootEnabled not set, see firstboot.log> "%P%\seemless\result\status.txt"
+  ) else if not defined AGENT_OK (
+    echo ERROR agent install.cmd failed, see firstboot.log> "%P%\seemless\result\status.txt"
   ) else (
     echo FIRSTBOOT_OK> "%P%\seemless\result\status.txt"
   )

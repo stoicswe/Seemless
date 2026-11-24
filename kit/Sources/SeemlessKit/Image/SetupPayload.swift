@@ -19,14 +19,24 @@ public struct ImageAssets: Sendable, Equatable {
     public static let accountScript = "setup-account.ps1"
     public func recipe(_ name: String) -> URL { root.appending(path: "recipes/\(name)", directoryHint: .isDirectory) }
 
-    /// `$SEEMLESS_IMAGE_ASSETS`, else `image/` in the repository containing
-    /// the running executable or the current directory.
+    /// `$SEEMLESS_IMAGE_ASSETS`, else `Contents/Resources/image` of the app
+    /// bundle containing the running executable (release builds), else
+    /// `image/` in the repository containing the running executable or the
+    /// current directory.
     public static func locate(environment: [String: String] = ProcessInfo.processInfo.environment) -> ImageAssets? {
         if let explicit = environment["SEEMLESS_IMAGE_ASSETS"], !explicit.isEmpty {
             return ImageAssets(root: URL(filePath: explicit, directoryHint: .isDirectory))
         }
+        let exeDir = URL(filePath: CommandLine.arguments.first ?? "").resolvingSymlinksInPath().deletingLastPathComponent()
+        let contents = exeDir.deletingLastPathComponent()
+        if contents.lastPathComponent == "Contents" {
+            let bundled = ImageAssets(root: contents.appending(path: "Resources/image", directoryHint: .isDirectory))
+            if FileManager.default.fileExists(atPath: bundled.winpe.appending(path: "apply.cmd").path(percentEncoded: false)) {
+                return bundled
+            }
+        }
         let starts = [
-            URL(filePath: CommandLine.arguments.first ?? "").resolvingSymlinksInPath().deletingLastPathComponent(),
+            exeDir,
             URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory),
         ]
         for start in starts {

@@ -1,0 +1,20 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Classic console (conhost) running cmd.exe, and an unowned message box raised by a console program",
+  "note": "Not captured from a real guest. With conhost as the console host, the window is ConsoleWindowClass, and GetWindowThreadProcessId reports the console client (cmd.exe), not conhost.exe. A MessageBox with a NULL owner is an unowned #32770.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x00400610", "class": "#32770", "title": "Seemless test", "style": "0x94C801C5", "ex_style": "0x00010101", "pid": 12008,
+     "process": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "rect": {"x": 1040, "y": 660, "w": 480, "h": 280},
+     "expect": "dialog", "note": "[System.Windows.Forms.MessageBox]::Show from PowerShell in that console: no owner"},
+    {"hwnd": "0x00400600", "class": "ConsoleWindowClass", "title": "C:\\Windows\\System32\\cmd.exe - powershell", "style": "0x14CF0000", "ex_style": "0x00040100", "pid": 11904,
+     "process": "C:\\Windows\\System32\\cmd.exe", "rect": {"x": 300, "y": 200, "w": 1600, "h": 900}, "expect": "normal"},
+    {"hwnd": "0x00400604", "class": "IME", "title": "Default IME", "style": "0x8C000000", "pid": 11960,
+     "process": "C:\\Windows\\System32\\conhost.exe", "owner": "0x00400600", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00400608", "class": "ConsoleWindowClass", "title": "C:\\Windows\\System32\\cmd.exe", "style": "0x34CF0000", "ex_style": "0x00040100", "pid": 12100,
+     "process": "C:\\Windows\\System32\\cmd.exe", "rect": {"x": -32000, "y": -32000, "w": 160, "h": 28},
+     "restore_rect": {"x": 400, "y": 260, "w": 1600, "h": 900}, "expect": "normal", "note": "a second console, minimised"}
+  ]
+}

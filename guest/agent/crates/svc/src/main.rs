@@ -1,7 +1,9 @@
 //! LocalSystem Windows service: owns the virtio-serial ports and supervises the session agent (docs/06).
 
 #[cfg(windows)]
-fn main() {}
+fn main() {
+    svc::win::main();
+}
 
 #[cfg(not(windows))]
 fn main() {

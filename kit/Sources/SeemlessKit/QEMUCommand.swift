@@ -1,28 +1,84 @@
 import Foundation
 
-/// Where the host-stack binaries live (`build/prefix` in development, inside
-/// the app bundle later).
+/// Where the host-stack binaries live: `build/prefix` in development, or
+/// inside a release `Seemless.app` (WP8.1, `scripts/package-release.sh`).
+///
+/// App bundle layout (`prefix` is `Seemless.app/Contents`):
+/// ```
+/// Contents/Helpers/    qemu-system-aarch64, qemu-img, swtpm, virgl_render_server, seemlessctl
+/// Contents/Frameworks/ every dylib (rpath @executable_path/../Frameworks, @loader_path)
+/// Contents/Resources/qemu/  firmware and QEMU data files (passed with -L)
+/// ```
 public struct HostStack: Sendable, Equatable {
+    public enum Layout: String, Sendable, Equatable {
+        /// `scripts/build-deps.sh` output: `bin/`, `lib/`, `share/qemu/`.
+        case prefix
+        /// A self-contained app bundle; `prefix` is its `Contents` directory.
+        case appBundle
+    }
+
     public var prefix: URL
+    public var layout: Layout
 
-    public init(prefix: URL) { self.prefix = prefix }
+    public init(prefix: URL, layout: Layout = .prefix) {
+        self.prefix = prefix
+        self.layout = layout
+    }
 
-    public var qemu: URL { prefix.appending(path: "bin/qemu-system-aarch64") }
-    public var qemuImg: URL { prefix.appending(path: "bin/qemu-img") }
-    public var swtpm: URL { prefix.appending(path: "bin/swtpm") }
-    public var firmwareCode: URL { prefix.appending(path: "share/qemu/edk2-aarch64-code.fd") }
-    public var libDirectory: URL { prefix.appending(path: "lib") }
-    public var angleLibDirectory: URL { prefix.appending(path: "ANGLE.xcarchive/Products/usr/local/lib") }
+    /// The stack inside an app bundle (`Seemless.app`).
+    public static func appBundle(_ bundle: URL) -> HostStack {
+        HostStack(prefix: bundle.appending(path: "Contents"), layout: .appBundle)
+    }
 
-    /// Finds the stack: `$SEEMLESS_PREFIX`, else `build/prefix` in the
-    /// repository containing the running executable or the current directory.
-    public static func locate(environment: [String: String] = ProcessInfo.processInfo.environment) -> HostStack? {
+    public var binDirectory: URL {
+        prefix.appending(path: layout == .prefix ? "bin" : "Helpers")
+    }
+    public var qemu: URL { binDirectory.appending(path: "qemu-system-aarch64") }
+    public var qemuImg: URL { binDirectory.appending(path: "qemu-img") }
+    public var swtpm: URL { binDirectory.appending(path: "swtpm") }
+    /// virglrenderer's render server. The prefix build has its path compiled
+    /// in; the bundle passes it as `RENDER_SERVER_EXEC_PATH`.
+    public var renderServer: URL {
+        layout == .prefix ? prefix.appending(path: "libexec/virgl_render_server")
+                          : binDirectory.appending(path: "virgl_render_server")
+    }
+    /// QEMU's data directory (firmware, option ROMs, keymaps).
+    public var dataDirectory: URL {
+        prefix.appending(path: layout == .prefix ? "share/qemu" : "Resources/qemu")
+    }
+    public var firmwareCode: URL { dataDirectory.appending(path: "edk2-aarch64-code.fd") }
+    public var libDirectory: URL {
+        prefix.appending(path: layout == .prefix ? "lib" : "Frameworks")
+    }
+    public var angleLibDirectory: URL {
+        layout == .prefix ? prefix.appending(path: "ANGLE.xcarchive/Products/usr/local/lib")
+                          : libDirectory
+    }
+    /// vkd3d-proton built for macOS on MoltenVK (WP7.5, `build-deps.sh vkd3d`):
+    /// the D3D12 library Neptune loads. It finds its d3d12core and
+    /// `libMoltenVK.dylib` next to itself.
+    public var d3d12Library: URL { libDirectory.appending(path: "libvkd3d-proton-d3d12.dylib") }
+
+    /// Finds the stack, in this order:
+    /// 1. `$SEEMLESS_PREFIX` (a prefix-layout directory);
+    /// 2. the app bundle containing the running executable (the app in
+    ///    `Contents/MacOS`, or `seemlessctl` in `Contents/Helpers`);
+    /// 3. `build/prefix` in the repository containing the running executable
+    ///    or the current directory (development).
+    public static func locate(environment: [String: String] = ProcessInfo.processInfo.environment,
+                              executable: URL? = nil,
+                              currentDirectory: URL? = nil) -> HostStack? {
         if let explicit = environment["SEEMLESS_PREFIX"], !explicit.isEmpty {
             return HostStack(prefix: URL(filePath: explicit, directoryHint: .isDirectory))
         }
+        let exeDir = (executable ?? URL(filePath: CommandLine.arguments.first ?? ""))
+            .resolvingSymlinksInPath().deletingLastPathComponent()
+        if let bundled = enclosingAppBundle(of: exeDir) {
+            return bundled
+        }
         let starts = [
-            URL(filePath: CommandLine.arguments.first ?? "").resolvingSymlinksInPath().deletingLastPathComponent(),
-            URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory),
+            exeDir,
+            currentDirectory ?? URL(filePath: FileManager.default.currentDirectoryPath, directoryHint: .isDirectory),
         ]
         for start in starts {
             var dir = start
@@ -35,6 +91,16 @@ public struct HostStack: Sendable, Equatable {
             }
         }
         return nil
+    }
+
+    /// The bundled stack when `directory` is `X.app/Contents/MacOS` or
+    /// `X.app/Contents/Helpers` and that bundle carries QEMU.
+    static func enclosingAppBundle(of directory: URL) -> HostStack? {
+        let contents = directory.deletingLastPathComponent()
+        guard contents.lastPathComponent == "Contents",
+              contents.deletingLastPathComponent().pathExtension == "app" else { return nil }
+        let candidate = HostStack(prefix: contents, layout: .appBundle)
+        return FileManager.default.isExecutableFile(atPath: candidate.qemu.path(percentEncoded: false)) ? candidate : nil
     }
 
     /// Missing files, as paths. Empty when the stack is usable.
@@ -136,6 +202,9 @@ public struct VMFiles: Sendable, Equatable {
     public var efiVars: URL { directory.appending(path: "efi_vars.fd") }
     public var tpmState: URL { directory.appending(path: "tpm", directoryHint: .isDirectory) }
     public var logs: URL { directory.appending(path: "logs", directoryHint: .isDirectory) }
+    /// vkd3d-proton's pipeline cache (WP7.5). Without it vkd3d-proton writes
+    /// `vkd3d-proton.cache` into QEMU's working directory.
+    public var shaderCache: URL { directory.appending(path: "shader-cache", directoryHint: .isDirectory) }
     /// Present while a VM process is running; see `RunningVM`.
     public var runningRecord: URL { directory.appending(path: "running.json") }
 }
@@ -174,6 +243,11 @@ public struct QEMUCommand: Sendable {
         let p = { (url: URL) in url.path(percentEncoded: false) }
         var a: [String] = []
         a += ["-name", "seemless-\(config.name)", "-nodefaults", "-no-user-config"]
+        if stack.layout == .appBundle {
+            // QEMU looks for data in <exe>/../share/qemu, which a bundle
+            // does not have (Contents/Resources/qemu instead).
+            a += ["-L", p(stack.dataDirectory)]
+        }
         a += ["-machine", "virt,highmem=on"]
         a += ["-accel", "hvf,ipa-granule-size=0x1000"]
         a += ["-cpu", "host"]
@@ -254,13 +328,32 @@ public struct QEMUCommand: Sendable {
     /// Environment additions for the QEMU process (docs/02; S1 findings).
     public var environment: [String: String] {
         let p = { (url: URL) in url.path(percentEncoded: false) }
-        return [
+        var env = [
             "ANGLE_DEFAULT_PLATFORM": "metal",
-            "DYLD_FALLBACK_LIBRARY_PATH": "\(p(stack.libDirectory)):\(p(stack.angleLibDirectory))",
             // virglrenderer defaults to d3dmetal when this is unset, so it is
             // always set explicitly (render_worker.c).
             "NPT_BACKEND": config.graphicsBackend.rawValue,
         ]
+        switch stack.layout {
+        case .prefix:
+            // build/prefix dylibs carry absolute install names; ANGLE and
+            // DXMT are dlopened by leaf name and found through this path.
+            env["DYLD_FALLBACK_LIBRARY_PATH"] = "\(p(stack.libDirectory)):\(p(stack.angleLibDirectory))"
+        case .appBundle:
+            // Signed binaries with entitlements ignore DYLD_* variables, so
+            // the bundle relies on LC_RPATH (leaf-name dlopen searches it).
+            // The render server path compiled into virglrenderer points at
+            // build/prefix; this override is read with getenv.
+            env["RENDER_SERVER_EXEC_PATH"] = p(stack.renderServer)
+        }
+        // D3D11/DXGI stay on DXMT, which has no D3D12; D3D12 comes from
+        // vkd3d-proton (D3a, WP7.5). D3DMetal provides its own D3D12, so its
+        // default is kept.
+        if config.graphicsBackend == .dxmt {
+            env["NPT_D3D12_LIBRARY_PATH"] = p(stack.d3d12Library)
+            env["VKD3D_SHADER_CACHE_PATH"] = p(files.shaderCache)
+        }
+        return env
     }
 
     /// swtpm arguments for this VM (TPM 2.0, state persisted per VM).

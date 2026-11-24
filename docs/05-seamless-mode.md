@@ -121,8 +121,90 @@ MINIMIZEEND/MOVESIZESTART/MOVESIZEEND`) and classifies each:
 
 Use `DWMWA_EXTENDED_FRAME_BOUNDS` for the visible rectangle (GetWindowRect
 includes invisible resize borders). Classification rules will need per-app
-exceptions; keep them in a data file (`guest/agent/rules.toml`) with tests
+exceptions; keep them in a data file (`rules.toml`) with tests
 built from recorded window dumps, not scattered `if`s.
+
+### Classification as built (WP5.1, 2026-11-24)
+
+Code: `guest/agent/crates/windows-model` (pure Rust, tested on the Mac).
+The checks are documented in full in `src/classify.rs`. In order, for each
+top-level window:
+
+1. **Dropped:**
+   - hidden (`WS_VISIBLE` clear);
+   - cloaked (any `DWMWA_CLOAKED` value: suspended UWP frames, other
+     virtual desktops, apps cloaked while they start);
+   - no area, or wholly off display 1, unless minimised.
+2. **`rules.toml`**, first match wins. It holds the shell (taskbar,
+   desktop, Start, Search, flyouts and toasts, lock screen, Alt-Tab), our own
+   agent windows, `SysShadow`, and the transient classes (`#32768` menu,
+   `tooltips_class32`, XAML/WinUI popups, `ComboLBox`, `SysDragImage`,
+   Office's `Net UI Tool Window` and `MsoSplash`).
+3. **Style rules:**
+   - `WS_EX_NOACTIVATE` → popup.
+   - An unowned frameless `WS_POPUP` (no caption, frame, system menu,
+     minimise box or `WS_EX_APPWINDOW`) is one of three things:
+     - **normal + fullscreen** if it covers display 1 exactly (the game-mode
+       trigger, sent as `FullscreenState`);
+     - **splash** if it is its process's only window;
+     - **popup** otherwise (custom menus such as Steam's).
+   - `WS_EX_TOOLWINDOW`: a tool window with a caption, else a popup.
+   - Owned windows: a dialog with a caption or `#32770`, else a popup.
+   - Everything else is a normal app window. Custom-chrome apps (Electron,
+     Steam) keep `WS_THICKFRAME` or a minimise box, so they land here.
+4. **Owners:** a window's `owner_id` is its nearest *mirrored* ancestor on
+   the `GW_OWNER` chain, so hidden helper owners are skipped. If no
+   ancestor is mirrored, an owned captioned window becomes **normal**: that
+   is a main window owned by a hidden application window (Delphi/VCL, VB6).
+   A `#32770` stays a dialog with no owner (a message box raised from a
+   console program).
+
+The last three kinds in the protocol (`menu`, `tooltip`, `popup`) are the
+"transient" class in the table above. `splash` and `tool` are mirrored too.
+The host shows only `normal` and `dialog` in Z1. Two consequences for the
+host when Z5 lands: an app that is still starting shows nothing until its
+main window appears, and `ZenLastWindowWatch` does not count a splash.
+
+**App identity** (`app_key`, docs/05 "App identity"), in order:
+
+1. the window's own AUMID;
+2. else its mirrored owner's key;
+3. else the one AUMID its process's other windows agree on;
+4. else the image path.
+
+Keys are lowercased. This matters because Windows sets the AUMID per
+window: Office sets it on the main window only, so without these steps
+Word's dialogs would form a second Dock group. `icon_id` is a stable FNV-1a
+hash of `app_key`; `Tracker::app_key_for_icon` maps it back for `GetIcon`.
+
+**Ids and diffs** (`Tracker`):
+
+- Ids are never reused. An HWND that returns with another pid or class is
+  a new window.
+- Each update diffs the whole re-enumerated list. WinEvents only mark the
+  list dirty, so a missed event cannot leave the host out of date.
+- Additions come owners first. Owned windows are kept in front of their
+  owners in the snapshot even if an enumeration races a z-order change.
+- Caps match the host's: 512 windows (the front-most are kept) and 256
+  title characters.
+
+**Rules file:**
+
+- The defaults are compiled in from `crates/windows-model/rules.toml`.
+- An optional `/agent/rules.toml` on the tools ISO is read first, so a
+  default can be corrected without rebuilding the agent.
+- Unknown keys are errors.
+
+**Dumps:** the ten recorded dumps in `tests/data` are **synthetic**: they
+were written by hand from how each app builds its windows, not captured
+(there was no Windows VM). `tests/data/README.md` gives the format and the
+capture path (`Dump::capture` over any `WindowSource`). Replace the dumps
+with real captures when the agent runs.
+
+**Not built:** the Win32 `WindowSource` itself (`EnumWindows`, the
+per-field calls listed on `RawWindow`, the `SetWinEventHook` registration).
+It lives with the session agent (WP4.2/WP5.2) and needs the Windows
+target, which is not installed here.
 
 ## Geometry model
 
@@ -240,7 +322,7 @@ Windows from the same guest application should group like a Mac app:
 | Input to the guest | **Ready for absolute pointer and keys**: QMP `input-send-event` (S3 measured a ~1 ms round trip). `PointerFocus`/`Activate` need the agent |
 | Window messages | **Schema and host client ready (WP4.1):** `WindowSnapshot/Added/Updated/Removed`, `PointerFocus`, `Activate/Activated`, `Deactivate`, `SetWindowRect`, `WindowCommand`, `HitTest`. The mock agent can script them today |
 | Clipboard | **Schema ready (WP4.1)**; needs the agent (WP4.5) |
-| Real window rectangles from Windows | **Missing.** Needs the Windows agent (WP4.2; its first build asks the owner to accept Microsoft's CRT/SDK licence for cargo-xwin) and `windows-model` (WP5.1) |
+| Real window rectangles from Windows | **Classification ready (WP5.1)**, tested on synthetic dumps only: `windows-model` turns a window list into the protocol's `Window` messages. **Still missing:** the Win32 enumerator, plus the Windows agent that sends the messages (WP4.2; its first build asks the owner to accept Microsoft's CRT/SDK licence for cargo-xwin) |
 | Per-window pixels (tier 1, atlas) | **Not proven.** Spike S5: WGC on the Neptune driver, a second scanout, and whether `IsBorderRequired = false` works without a prompt |
 | 3D driver in the guest | **Ready:** UTM v0.6, D3D11 at FL 11_1. The reset abort is fixed. VM `wp31` has it |
 

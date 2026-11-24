@@ -1,0 +1,32 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Two apps starting: a WinForms app's tool-window splash before its main form shows, Excel's MsoSplash, and a Delphi-style app whose main form is owned by a hidden application window",
+  "note": "Not captured from a real guest. Splash screens are unowned frameless WS_POPUPs, often WS_EX_TOOLWINDOW|WS_EX_TOPMOST; the app's main form exists but is still hidden. Delphi (VCL) apps own every form by a hidden TApplication window.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x00600810", "class": "WindowsForms10.Window.8.app.0.2bf8098_r6_ad1", "title": "", "style": "0x96000000", "ex_style": "0x00080088", "pid": 14100,
+     "process": "C:\\Program Files\\paint.net\\paintdotnet.exe", "rect": {"x": 980, "y": 600, "w": 600, "h": 400},
+     "expect": "splash", "note": "tool-window, topmost, layered splash"},
+    {"hwnd": "0x00600800", "class": "WindowsForms10.Window.8.app.0.2bf8098_r6_ad1", "title": "paint.net", "style": "0x06CF0000", "ex_style": "0x00050100", "pid": 14100,
+     "process": "C:\\Program Files\\paint.net\\paintdotnet.exe", "rect": {"x": 200, "y": 100, "w": 2100, "h": 1300},
+     "expect": "ignore:hidden", "note": "main form, created but not shown yet"},
+    {"hwnd": "0x00600820", "class": ".NET-BroadcastEventWindow.2bf8098.0", "title": ".NET-BroadcastEventWindow.2bf8098.0", "style": "0x84000000", "pid": 14100,
+     "process": "C:\\Program Files\\paint.net\\paintdotnet.exe", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00600900", "class": "MsoSplash", "title": "Microsoft Excel", "style": "0x96000000", "ex_style": "0x00080080", "pid": 14500,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE", "rect": {"x": 900, "y": 560, "w": 760, "h": 480},
+     "expect": "splash", "note": "kind set by rules.toml"},
+    {"hwnd": "0x00600910", "class": "XLMAIN", "title": "Excel", "style": "0x16CF0000", "ex_style": "0x00000100", "pid": 14500,
+     "process": "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE", "aumid": "Microsoft.Office.EXCEL.EXE.15", "cloaked": 1,
+     "rect": {"x": 0, "y": 0, "w": 2560, "h": 1504}, "expect": "ignore:cloaked", "note": "main window app-cloaked until its first paint"},
+    {"hwnd": "0x00600A20", "class": "TfrmConnections", "title": "Session manager", "style": "0x96C80000", "ex_style": "0x00010101", "pid": 14700,
+     "process": "C:\\Program Files\\HeidiSQL\\heidisql.exe", "owner": "0x00600A10", "rect": {"x": 700, "y": 400, "w": 1100, "h": 760},
+     "expect": "dialog", "expect_owner": "0x00600A10"},
+    {"hwnd": "0x00600A10", "class": "TfrmMain", "title": "HeidiSQL 12.10", "style": "0x16CF0000", "ex_style": "0x00000100", "pid": 14700,
+     "process": "C:\\Program Files\\HeidiSQL\\heidisql.exe", "owner": "0x00600A00", "rect": {"x": 300, "y": 160, "w": 1800, "h": 1200},
+     "expect": "normal", "note": "owned by the hidden TApplication window (no WS_EX_APPWINDOW needed): normal, owner dropped"},
+    {"hwnd": "0x00600A00", "class": "TApplication", "title": "HeidiSQL", "style": "0x84CA0000", "ex_style": "0x00000188", "pid": 14700,
+     "process": "C:\\Program Files\\HeidiSQL\\heidisql.exe", "rect": {"x": 1280, "y": 800, "w": 0, "h": 0}, "expect": "ignore:hidden"}
+  ]
+}

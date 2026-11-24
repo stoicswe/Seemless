@@ -99,6 +99,9 @@ import Testing
         cfg.graphicsBackend = .d3dmetal
         #expect(command(config: cfg).environment["NPT_BACKEND"] == "d3dmetal")
         #expect(command().environment["ANGLE_DEFAULT_PLATFORM"] == "metal")
+        #expect(command().environment["NPT_D3D12_LIBRARY_PATH"] == "/p/lib/libvkd3d-proton-d3d12.dylib")
+        #expect(command(config: cfg).environment["NPT_D3D12_LIBRARY_PATH"] == nil)
+        #expect(command().environment["VKD3D_SHADER_CACHE_PATH"]?.hasSuffix("/shader-cache/") == true)
         #expect(command().environment["DYLD_FALLBACK_LIBRARY_PATH"] == "/p/lib:/p/ANGLE.xcarchive/Products/usr/local/lib")
     }
 
@@ -165,5 +168,65 @@ import Testing
     @Test func descriptionsAreReadable() {
         let all: [VMProcess.State] = [.stopped, .starting, .running, .paused, .stopping, .crashed("exit 1")]
         #expect(all.map(\.description) == ["stopped", "starting", "running", "paused", "stopping", "crashed (exit 1)"])
+    }
+}
+
+/// Release app bundle layout (WP8.1).
+@Suite struct HostStackBundleTests {
+    func bundleCommand() -> QEMUCommand {
+        QEMUCommand(
+            config: VMConfig(cpuCount: 4, memoryMiB: 8192, macAddress: "02:00:00:00:00:01"),
+            stack: .appBundle(URL(filePath: "/A/Seemless.app", directoryHint: .isDirectory)),
+            files: VMFiles(directory: URL(filePath: "/vm", directoryHint: .isDirectory)),
+            run: RunPaths(directory: URL(filePath: "/r", directoryHint: .isDirectory)),
+            options: LaunchOptions(display: .headless))
+    }
+
+    @Test func bundlePaths() {
+        let s = HostStack.appBundle(URL(filePath: "/A/Seemless.app", directoryHint: .isDirectory))
+        #expect(s.qemu.path(percentEncoded: false) == "/A/Seemless.app/Contents/Helpers/qemu-system-aarch64")
+        #expect(s.swtpm.path(percentEncoded: false) == "/A/Seemless.app/Contents/Helpers/swtpm")
+        #expect(s.firmwareCode.path(percentEncoded: false) == "/A/Seemless.app/Contents/Resources/qemu/edk2-aarch64-code.fd")
+        #expect(s.d3d12Library.path(percentEncoded: false) == "/A/Seemless.app/Contents/Frameworks/libvkd3d-proton-d3d12.dylib")
+    }
+
+    @Test func bundlePassesDataDirAndNoDyldVariables() {
+        let cmd = bundleCommand()
+        let args = cmd.arguments
+        let l = args.firstIndex(of: "-L")
+        #expect(l != nil && args[l! + 1] == "/A/Seemless.app/Contents/Resources/qemu")
+        #expect(cmd.environment["DYLD_FALLBACK_LIBRARY_PATH"] == nil)
+        #expect(cmd.environment["RENDER_SERVER_EXEC_PATH"] == "/A/Seemless.app/Contents/Helpers/virgl_render_server")
+    }
+
+    @Test func prefixLayoutHasNoDataDirArgument() {
+        let cmd = QEMUCommand(
+            config: VMConfig(cpuCount: 4, memoryMiB: 8192, macAddress: "02:00:00:00:00:01"),
+            stack: HostStack(prefix: URL(filePath: "/p", directoryHint: .isDirectory)),
+            files: VMFiles(directory: URL(filePath: "/vm", directoryHint: .isDirectory)),
+            run: RunPaths(directory: URL(filePath: "/r", directoryHint: .isDirectory)),
+            options: LaunchOptions(display: .headless))
+        #expect(!cmd.arguments.contains("-L"))
+        #expect(cmd.environment["RENDER_SERVER_EXEC_PATH"] == nil)
+    }
+
+    @Test func locatePrefersEnclosingBundle() throws {
+        let tmp = FileManager.default.temporaryDirectory.appending(path: "hoststack-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let app = tmp.appending(path: "Seemless.app")
+        let helpers = app.appending(path: "Contents/Helpers")
+        try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: app.appending(path: "Contents/MacOS"), withIntermediateDirectories: true)
+        let qemu = helpers.appending(path: "qemu-system-aarch64")
+        FileManager.default.createFile(atPath: qemu.path(percentEncoded: false), contents: Data(),
+                                       attributes: [.posixPermissions: 0o755])
+        let found = HostStack.locate(environment: [:], executable: app.appending(path: "Contents/MacOS/Seemless"),
+                                     currentDirectory: tmp)
+        #expect(found?.layout == .appBundle)
+        #expect(found?.qemu.resolvingSymlinksInPath() == qemu.resolvingSymlinksInPath())
+        let ctl = HostStack.locate(environment: [:], executable: helpers.appending(path: "seemlessctl"), currentDirectory: tmp)
+        #expect(ctl?.layout == .appBundle)
+        // SEEMLESS_PREFIX still wins.
+        #expect(HostStack.locate(environment: ["SEEMLESS_PREFIX": "/x"], executable: qemu)?.layout == .prefix)
     }
 }

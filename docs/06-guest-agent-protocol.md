@@ -8,9 +8,14 @@
 | `seemless-agent.exe` | The logged-on user, interactive desktop, UIAccess | Service | Window tracking, capture/atlas, input assist, clipboard, drag and drop, app catalogue, notifications, file open, DPI/display settings |
 
 The service is the single owner of the serial ports and multiplexes for the
-session agent over a local named pipe (`\\.\pipe\seemless-agent`, ACL'd to
-the interactive user and SYSTEM). This keeps the link alive across logoff,
-session agent crashes and updates.
+session agent over a local named pipe. This keeps the link alive across
+logoff, session agent crashes and updates. The pipe is
+`\\.\pipe\seemless-agent-<32 random hex>`: a new name each time the service
+starts, created with `FILE_FLAG_FIRST_PIPE_INSTANCE` and passed to the session
+agent on its command line, so no other process can create it first and pose
+as the service. Its DACL admits SYSTEM and interactive users, it rejects
+remote clients, and the service accepts only the process id of the session
+agent it started.
 
 Rust workspace layout (`guest/agent/`):
 
@@ -35,9 +40,10 @@ runs it).
 
 ## Transport and framing
 
-- Two virtio-serial ports (02). Guest side opens them by port name via the
-  vioserial device interface (`GUID_VIOSERIAL_PORT`, enumerate with SetupAPI,
-  match the port name).
+- Two virtio-serial ports (02). The guest opens them by port name: the
+  vioserial driver publishes each named port as `\\.\Global\<name>` (the
+  same path qemu-guest-agent uses), so no SetupAPI enumeration is needed
+  (WP4.2). Handles are overlapped, so a pending read never blocks a write.
 - Frame: `u32 length (LE) | u8 kind | payload`, where `length` is the payload
   length (the kind byte is not counted). `kind` 0 = Protobuf `Envelope`,
   1 = raw bulk chunk (bulk port only). Max payload 1 MiB on control, 4 MiB on
@@ -85,6 +91,65 @@ Framing and handshake exist twice (`crates/proto/src/{frame,handshake}.rs`,
 `proto/testdata/` keep the two byte-identical, and both test suites check
 them. Regenerate them with `SEEMLESS_BLESS=1 cargo test -p proto` after a
 deliberate change.
+
+## Agent implementation (WP4.2)
+
+Crates: `transport` (`link`: framed reader/writer threads over any byte
+stream, with a bounded write queue that drops when full; `win`: vioserial
+port and pipe), `svc` (`router`: sans-IO routing; `serve`: event loop; `win`:
+SCM, supervisor, GuestInfo), `session` (`Core`: sans-IO; `main`: pipe
+client). `router`, `serve`, `link` and `session::Core` are tested on the Mac
+over unix sockets; only the `win` modules are Windows-only.
+
+- **Service** (`seemless-agent-svc.exe`, service `SeemlessAgent`, LocalSystem,
+  auto-start, restarted by the SCM on failure). `console [--supervise]` runs
+  the same loop in a console; `info` prints GuestInfo. Log:
+  `%ProgramData%\Seemless\logs\agent-svc.log` (one `.1` kept past 1 MiB).
+- **Host link.** The service opens the control port, sends `Hello`, and
+  reopens the port 1 s after it fails (missing driver, read error). It answers
+  `Hello`, `Ping` and `GetGuestInfo` itself; `SetHostInfo`, `TimeSync`,
+  `Shutdown`, `UpdateTools` and `RunCommand` get `Error UNSUPPORTED` until
+  their work packages (WP4.3/4.4); window, app, clipboard and drag requests
+  are forwarded to the session agent (`UNSUPPORTED` when none is running).
+  A host `Hello` with `reply_to = 0` starts a new host connection: seqs
+  restart at 1 and requests in flight across the service are dropped.
+  After a framing error the decoder restarts with the next read; bytes that
+  arrived in the same read as the bad frame are discarded.
+- **GuestInfo** (registry): `os_build` = product name (corrected to
+  "Windows 11" from build 22000), display version and `10.0.<build>.<UBR>`;
+  `gpu_adapter` = Display-class `DriverDesc`s; `driver_versions` = Display
+  devices plus VirtIO/Red Hat drivers in the System, Net and SCSI classes.
+  Strings capped at 128 characters, at most 32 drivers.
+- **Session pipe.** Same framing and `Envelope`s. The session agent sends
+  `Hello` (role `GUEST_SERVICE`); the service answers with role `HOST`
+  (service and session agent ship together, so their versions must match
+  exactly), then forwards the host's current `Hello` and every later one
+  (a host (re)connect: the session agent resends its state). Pipe seqs are
+  separate; the service maps request and reply seqs between the links. The
+  session agent may send only window/app/clipboard/drag events, `OpenOnHost`
+  and `ClipboardRequest` (requests), and replies to forwarded requests;
+  anything else is dropped. It may claim only `windows.v1`, `apps.v1`,
+  `clipboard.v1` and `dragdrop.v1`.
+- **Capabilities.** The service advertises `core.v1` plus the session
+  agent's capabilities. When that set changes (agent connects or exits) it
+  sends the host a fresh `Hello`, which the host treats as an agent restart.
+- **Supervision.** Every 2 s, if no session agent runs and a user is logged
+  on at the console, the service starts `seemless-agent.exe --pipe <path>`
+  as that user on `winsta0\default` (`WTSQueryUserToken` +
+  `CreateProcessAsUser`). An exit is restarted with a backoff of 1 s doubling
+  to 30 s, reset after a minute of running. The session agent exits when the
+  pipe closes. Not yet: UIAccess (needs a signed binary), session-change
+  notifications (polling covers them).
+- **Session agent** (`seemless-agent.exe`, GUI subsystem, no window): the
+  WP4.2 skeleton claims no capabilities and answers every forwarded request
+  `Error UNSUPPORTED`. Log: `%LOCALAPPDATA%\Seemless\logs\agent.log`.
+- **Install.** `guest/tools/build-agent.sh` builds both binaries
+  (cargo-xwin) and stages `build/guest-tools/agent/` (binaries,
+  `install.cmd`, `uninstall.cmd`, `version.txt`). `seemlessctl image build
+  --agent build/guest-tools/agent` copies it to `%ProgramFiles%\Seemless`
+  (apply.cmd) and `firstboot.cmd` runs `install.cmd` (`sc create`, failure
+  restarts, `sc start`). The vioserial driver comes from `--drivers`. In-place
+  updates are WP4.3.
 
 ## Message catalogue (v1)
 

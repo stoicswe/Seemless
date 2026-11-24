@@ -1,0 +1,33 @@
+{
+  "format": "seemless-window-dump/1",
+  "origin": "synthetic",
+  "app": "Notepad (Windows 11, packaged): two windows, one maximised, one minimised; IME helpers",
+  "note": "Not captured from a real guest. Written from the known structure of Windows 11 Notepad (WinUI, class Notepad) and the IME helper windows every GUI thread gets.",
+  "windows_build": "26300",
+  "display": {"rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "work_area": {"x": 0, "y": 0, "w": 2560, "h": 1504}},
+  "windows": [
+    {"hwnd": "0x000402B4", "class": "Xaml_WindowedPopupClass", "title": "PopupHost", "style": "0x96000000", "ex_style": "0x00200088",
+     "pid": 5120, "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2508.38.0_arm64__8wekyb3d8bbwe\\Notepad\\Notepad.exe",
+     "owner": "0x000402A4", "rect": {"x": 40, "y": 96, "w": 560, "h": 720},
+     "expect": "popup", "expect_owner": "0x000402A4", "note": "File menu open (XAML flyout)"},
+    {"hwnd": "0x000402A4", "class": "Notepad", "title": "notes.txt - Notepad", "style": "0x17CF0000", "ex_style": "0x00200100",
+     "pid": 5120, "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2508.38.0_arm64__8wekyb3d8bbwe\\Notepad\\Notepad.exe",
+     "aumid": "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "rect": {"x": 0, "y": 0, "w": 2560, "h": 1504},
+     "expect": "normal", "note": "maximised main window"},
+    {"hwnd": "0x000502B0", "class": "Notepad", "title": "Untitled - Notepad", "style": "0x36CF0000", "ex_style": "0x00200100",
+     "pid": 5120, "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2508.38.0_arm64__8wekyb3d8bbwe\\Notepad\\Notepad.exe",
+     "aumid": "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App", "rect": {"x": -32000, "y": -32000, "w": 160, "h": 28},
+     "restore_rect": {"x": 240, "y": 160, "w": 1920, "h": 1280},
+     "expect": "normal", "note": "second window, minimised: parked at -32000, restore rect reported"},
+    {"hwnd": "0x000402A8", "class": "IME", "title": "Default IME", "style": "0x8C000000", "pid": 5120,
+     "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2508.38.0_arm64__8wekyb3d8bbwe\\Notepad\\Notepad.exe",
+     "owner": "0x000402A4", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x000402AC", "class": "MSCTFIME UI", "title": "MSCTFIME UI", "style": "0x8C000000", "pid": 5120,
+     "process": "C:\\Program Files\\WindowsApps\\Microsoft.WindowsNotepad_11.2508.38.0_arm64__8wekyb3d8bbwe\\Notepad\\Notepad.exe",
+     "owner": "0x000402A4", "rect": {"x": 0, "y": 0, "w": 0, "h": 0}, "expect": "ignore:hidden"},
+    {"hwnd": "0x00010010", "class": "Shell_TrayWnd", "style": "0x96000000", "ex_style": "0x00000088", "pid": 3880,
+     "process": "C:\\Windows\\explorer.exe", "rect": {"x": 0, "y": 1504, "w": 2560, "h": 96}, "expect": "ignore:rule"},
+    {"hwnd": "0x000100A2", "class": "Progman", "title": "Program Manager", "style": "0x96000000", "ex_style": "0x00000080", "pid": 3880,
+     "process": "C:\\Windows\\explorer.exe", "rect": {"x": 0, "y": 0, "w": 2560, "h": 1600}, "expect": "ignore:rule"}
+  ]
+}
