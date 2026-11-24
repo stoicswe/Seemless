@@ -20,6 +20,18 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// Removable media that stay attached across starts (an installer ISO,
     /// guest tools). Per-launch extras go in `LaunchOptions.removableDrives`.
     public var media: [AttachedMedia]
+    /// Start with the network cable unplugged until Windows' first setup
+    /// reaches the desktop (owner, 2026-11-24): set by the image build, so
+    /// the licence page and first sign-in run offline. Cleared, and the
+    /// cable plugged in, by `VMManager.finishOfflineSetup` (docs/02
+    /// "Network link").
+    public var offlineUntilSetupDone: Bool
+    /// Quarantine (owner, 2026-11-24): nil for a normal VM. A quarantined VM
+    /// has no connection to the Mac except keyboard, mouse and display,
+    /// unless a connection is switched on here. "Off" means the virtual
+    /// device is not there at all, so changes apply at the next start.
+    /// Chosen when the VM is created; can be lifted while it is stopped.
+    public var quarantine: Quarantine?
 
     public init(
         name: String = "default",
@@ -31,7 +43,9 @@ public struct VMConfig: Codable, Sendable, Equatable {
         portForwards: [PortForward] = [],
         macAddress: String = VMConfig.randomMAC(),
         boot: BootSettings = BootSettings(),
-        media: [AttachedMedia] = []
+        media: [AttachedMedia] = [],
+        offlineUntilSetupDone: Bool = false,
+        quarantine: Quarantine? = nil
     ) {
         self.name = name
         self.cpuCount = cpuCount
@@ -43,10 +57,13 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.macAddress = macAddress
         self.boot = boot
         self.media = media
+        self.offlineUntilSetupDone = offlineUntilSetupDone
+        self.quarantine = quarantine
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, cpuCount, memoryMiB, diskSizeGiB, graphicsBackend, network, portForwards, macAddress, boot, media
+        case name, cpuCount, memoryMiB, diskSizeGiB, graphicsBackend, network, portForwards, macAddress, boot, media,
+             offlineUntilSetupDone, quarantine
     }
 
     /// Fields added after the first release decode with defaults, so older
@@ -63,6 +80,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         macAddress = try c.decode(String.self, forKey: .macAddress)
         boot = try c.decodeIfPresent(BootSettings.self, forKey: .boot) ?? BootSettings()
         media = try c.decodeIfPresent([AttachedMedia].self, forKey: .media) ?? []
+        offlineUntilSetupDone = try c.decodeIfPresent(Bool.self, forKey: .offlineUntilSetupDone) ?? false
+        quarantine = try c.decodeIfPresent(Quarantine.self, forKey: .quarantine)
     }
 
     /// Firmware-level settings: what the UEFI firmware tries first and which

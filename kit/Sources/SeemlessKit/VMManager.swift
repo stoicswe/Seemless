@@ -14,6 +14,8 @@ public actor VMManager {
     public nonisolated var store: VMStore { VMStore(layout: layout, stack: stack) }
 
     private var owned: [String: VMProcess] = [:]
+    /// Agent links of owned VMs (WP4.4; `AgentLink`), ended with the VM.
+    var links: [String: (link: AgentLink, task: Task<Void, Never>)] = [:]
 
     public init(layout: StorageLayout, stack: HostStack) {
         self.layout = layout
@@ -99,7 +101,7 @@ public actor VMManager {
 
     public enum ManagerError: Error, Equatable, CustomStringConvertible {
         case running(String), notRunning(String), cannotShrinkDisk(Int, Int), cannotRename, mediaMissing([String])
-        case invalidMedia(String)
+        case invalidMedia(String), noNetwork(String), quarantined(String, VMConfig.Connection)
 
         public var description: String {
             switch self {
@@ -109,6 +111,8 @@ public actor VMManager {
             case .cannotRename: return "a VM cannot be renamed"
             case .mediaMissing(let paths): return "attached media not found: " + paths.joined(separator: ", ")
             case .invalidMedia(let why): return why
+            case .noNetwork(let n): return "VM '\(n)' has no network (network mode none, or off in quarantine)"
+            case .quarantined(let n, let c): return "VM '\(n)' is quarantined and its \(c.rawValue) connection is off"
             }
         }
     }
@@ -126,6 +130,7 @@ public actor VMManager {
         // Kept even if start fails, so status reports the crash reason.
         owned[name] = vm
         try await vm.start(resume: resume)
+        startAgentLink(name, config: config, run: RunPaths(directory: runDir), vm: vm)
     }
 
     // MARK: Open in Seemless
@@ -143,6 +148,8 @@ public actor VMManager {
                        replaceAfter: Duration = .seconds(120)) async throws -> GuestLaunch.Request {
         let state = await status(of: name).state
         guard state == .running || state == .paused else { throw GuestLaunch.LaunchError.notRunning(name) }
+        // Hot-plugs a USB drive with the Mac's file: a file transfer.
+        guard try store.load(name).allows(.files) else { throw ManagerError.quarantined(name, .files) }
         let directory = launchDirectory(name)
         let request = try await GuestLaunch.makeDrive(for: installer, in: directory, assets: assets)
         do {
@@ -180,7 +187,11 @@ public actor VMManager {
     }
 
     public func resume(_ name: String) async throws {
-        if let vm = owned[name] { try await vm.resume(); return }
+        if let vm = owned[name] {
+            try await vm.resume()
+            await links[name]?.link.syncNow() // the guest clock stood still
+            return
+        }
         let qmp = try await remote(name).connect()
         defer { Task { await qmp.close() } }
         try await qmp.cont()
@@ -196,6 +207,9 @@ public actor VMManager {
     /// after `graceful`. `.zero` powers off immediately.
     @discardableResult
     public func stop(_ name: String, graceful: Duration = .seconds(60)) async throws -> VMProcess.StopMethod {
+        // Ask Windows through the agent first (WP4.4); the ACPI power button
+        // below is then a no-op, and still the fallback without an agent.
+        if graceful > .zero { _ = await askAgentToShutDown(name) }
         if let vm = owned[name] { return await vm.stop(graceful: graceful) }
         return try await remote(name).stop(graceful: graceful)
     }
@@ -217,6 +231,49 @@ public actor VMManager {
             }
             return names.sorted()
         }
+    }
+
+    // MARK: Network link (docs/02 "Network link")
+
+    /// Whether the running VM's virtual network cable is plugged in; nil
+    /// when the VM is not running or has no network.
+    public func isNetworkConnected(_ name: String) async -> Bool? {
+        guard let config = try? store.load(name), config.effectiveNetwork != .none,
+              let run = await runPaths(name) else { return nil }
+        return NetworkLink.isConnected(run: run)
+    }
+
+    /// Plugs the running VM's network cable in or out. Windows sees the
+    /// cable change; the network settings stay as they are.
+    public func setNetworkConnected(_ name: String, _ connected: Bool) async throws {
+        let config = try store.load(name)
+        guard config.effectiveNetwork != .none else { throw ManagerError.noNetwork(name) }
+        guard let run = await runPaths(name) else { throw ManagerError.notRunning(name) }
+        try await withQMP(name) { try await NetworkLink.set(connected: connected, qmp: $0, run: run) }
+    }
+
+    /// Ends an offline first setup: Windows reached the desktop, so the
+    /// cable is plugged in and later starts are online. Does nothing for a
+    /// VM that was not set up offline. Called when the guest agent reports
+    /// a signed-in desktop, or by hand.
+    public func finishOfflineSetup(_ name: String) async throws {
+        var config = try store.load(name)
+        guard config.offlineUntilSetupDone else { return }
+        if config.effectiveNetwork != .none, await runPaths(name) != nil {
+            try await setNetworkConnected(name, true)
+        }
+        config.offlineUntilSetupDone = false
+        try store.save(config)
+    }
+
+    private func runPaths(_ name: String) async -> RunPaths? {
+        if let vm = owned[name] {
+            switch await vm.state {
+            case .running, .paused, .starting: return vm.run
+            default: return nil
+            }
+        }
+        return VMRemote.attach(store.files(for: name))?.record.run
     }
 
     private func remote(_ name: String) throws -> VMRemote {
@@ -254,6 +311,7 @@ public actor VMManager {
     public func attachMedia(_ name: String, file: URL, kind: VMConfig.AttachedMedia.Kind? = nil) async throws -> VMConfig {
         try await requireStopped(name)
         var config = try store.load(name)
+        guard config.allows(.files) else { throw ManagerError.quarantined(name, .files) }
         let path = file.standardizedFileURL.path(percentEncoded: false)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else {

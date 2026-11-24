@@ -189,6 +189,51 @@ diagnostics. vmnet shared/bridged is a later, entitlement-dependent option.
 Host → guest services (e.g. local dev servers) via explicit port forwards in
 settings (`hostfwd`).
 
+Machine ▸ Disconnect from Network / Connect to Network (⌥⌘I) unplugs or plugs
+in the virtual cable while the VM runs. New VMs do their first setup offline
+and connect once Windows reaches the desktop. Details: docs/02 "Network link".
+
+## Quarantine
+
+Owner request (2026-11-24): a VM can be **quarantined**. It then has no
+connection to the Mac except keyboard, mouse and display, unless single
+connections are switched on.
+
+- **Chosen at creation:** in the New VM sheet (Isolation ▸ Quarantine this
+  VM), with `seemlessctl vm create --quarantine`, or with `image build
+  --quarantine`. It can't be added to an existing VM later.
+- **Lifted only while stopped:** Settings ▸ Quarantine ▸ Lift Quarantine…
+  shows a warning first; the CLI is `vm quarantine lift --yes`. The VM then
+  gets every normal connection at its next start (owner's choice).
+- **"Off" means no device** (owner's choice): the virtual hardware is left
+  out of the QEMU command line, so the guest can't reach it at all, and
+  changes apply at the next start (`QEMUCommand`, `VMConfig.allows`).
+
+| Connection | Off | On |
+|------------|-----|----|
+| Network | No NIC, no port forwards | The VM's configured network |
+| Guest agent | No virtio-serial device: no Zen mode, window information or agent shutdown | Agent channel |
+| Clipboard Mac → Windows | — | Allowed; needs the agent |
+| Clipboard Windows → Mac | — | Allowed; needs the agent |
+| Files | No attached disks or ISOs; Open in Seemless refused | Attach media, Open in Seemless; drag and drop and shared folders (need the agent) |
+| Sound | No audio device | Sound out (QEMU's `usb-audio` is playback only: there is no microphone device to switch) |
+
+Always on: USB keyboard and tablet, the display, the NVMe system disk and
+the TPM. Drives given for one launch only (the image build's installer and
+setup disk) are not attached media and still work, so a quarantined VM can
+be installed.
+
+New features that move data between Windows and the Mac (clipboard WP4.5,
+drag and drop, shared folders, notifications, `OpenOnHost`) must check
+`VMConfig.allows(_:)` on the host before moving anything. In a quarantined
+VM, a connection field the config doesn't name decodes as off, so a new
+connection is never switched on by accident.
+
+CLI: `seemlessctl vm quarantine show|set <connection> on|off|lift`.
+Verified (2026-11-24): a quarantined VM booted with only the display, NVMe and
+USB controller on PCI (no virtio-net or virtio-serial) and no `usb-audio`, and
+`vm network` reported no network.
+
 ## Controllers and other devices
 
 - Game controllers: `GameController.framework` on the host → emulated Xbox

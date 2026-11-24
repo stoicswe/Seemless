@@ -21,6 +21,8 @@ pub enum Event {
     Host(Received),
     SessionAccepted { id: u64, writer: Writer, close: Box<dyn Fn() + Send> },
     Session { id: u64, received: Received },
+    /// The console session as polled by the platform.
+    SessionState(proto::v1::SessionState),
     /// Stop the service (SCM stop/shutdown, or a test).
     Stop,
 }
@@ -119,6 +121,7 @@ pub fn run(mut router: Router, rx: Receiver<Event>) {
     for event in rx {
         let outputs = match event {
             Event::Stop => break,
+            Event::SessionState(state) => router.handle(Input::SessionState(state)),
             Event::HostOpened(w) => {
                 host = Some(w);
                 router.start()
@@ -298,7 +301,7 @@ mod tests {
         assert_eq!(sess.recv().reply_to, sh);
         assert_eq!(sess.recv().body, Some(Body::Hello(hello)), "the host's Hello is forwarded");
         let Some(Body::Hello(again)) = host.recv().body else { panic!("fresh Hello to the host") };
-        assert_eq!(again.capabilities, ["apps.v1", "core.v1"]);
+        assert_eq!(again.capabilities, ["apps.v1", "core.v1", "system.v1"]);
 
         // A host request travels to the session agent and back.
         let req = host.send(0, Body::ListApps(ListApps {}));
@@ -308,10 +311,10 @@ mod tests {
         let back = host.recv();
         assert_eq!((back.reply_to, back.body), (req, Some(Body::AppList(Default::default()))));
 
-        // Session agent goes away: capabilities drop back to core.
+        // Session agent goes away: capabilities drop back to the service's own.
         sess.stream.shutdown(std::net::Shutdown::Both).unwrap();
         let Some(Body::Hello(after)) = host.recv().body else { panic!() };
-        assert_eq!(after.capabilities, ["core.v1"]);
+        assert_eq!(after.capabilities, ["core.v1", "system.v1"]);
         let p = host.send(0, Body::Ping(Ping { nonce: 5 }));
         assert_eq!(host.recv().reply_to, p);
 

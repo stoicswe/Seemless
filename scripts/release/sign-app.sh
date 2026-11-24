@@ -49,7 +49,7 @@ else
   team="$(codesign -dv "$tmp/probe.dylib" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
   if [[ -n "$team" && "$team" != "not set" ]]; then kind=developer-id; else kind=self-signed; fi
 fi
-echo "sign: kind=$kind${identity:+ identity=$identity}"
+if [[ $kind == adhoc ]]; then echo "sign: kind=adhoc"; else echo "sign: kind=$kind identity=$identity"; fi
 
 if [[ $kind == developer-id ]]; then
   flags+=(--timestamp)

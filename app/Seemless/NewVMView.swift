@@ -116,6 +116,8 @@ struct NewVMView: View {
 
                 HardwareFields(config: $config)
 
+                QuarantineFields(config: $config, creating: true)
+
                 let errors = problems
                 if !errors.isEmpty, iso != nil {
                     Section {

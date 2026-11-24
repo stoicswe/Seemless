@@ -193,6 +193,30 @@ stopped → starting → running ⇄ paused
 | Implemented (M1) | `VMProcess` (owner) and `VMRemote` (other processes, via `vms/<name>/running.json`); stop escalates ACPI power button → QMP `quit` → SIGTERM → SIGKILL; restart = QMP `system_reset`; the last 5 QEMU logs are kept in `vms/<name>/logs/`. CLI: `seemlessctl vm run|status|pause|resume|restart|stop` |
 | `VMManager` | One actor over every VM in a storage root: list, status (owned by this process or started elsewhere), start/pause/resume/reset/stop, settings, media, firmware/TPM reset, snapshots. Used by the app and the CLI's `vm set`/`media`/`firmware` commands. Each VM started by one process gets its own `run/<pid>/<id>/` |
 
+### Network link
+
+Owner requests (2026-11-24): a quick way to take a VM off the network,
+and an offline first setup.
+
+- **Connect / disconnect:** QMP `set_link` on the netdev `n0`. That also
+  takes the virtio-net NIC's link down, so Windows shows "Network cable
+  unplugged" and stops all traffic, while its network settings stay as they
+  are. QEMU has no query for link state, so `NetworkLink` records it in the
+  run directory (`network-link`). Every start begins connected.
+  - App: Machine ▸ Disconnect from Network / Connect to Network (⌥⌘I).
+  - CLI: `seemlessctl vm network status|connect|disconnect`.
+  - Verified on a Windows 11 VM (2026-11-24): the tray icon changed to "not
+    connected" on disconnect and back to wired on connect.
+- **Offline first setup:** the image build saves new VMs with
+  `VMConfig.offlineUntilSetupDone`. While it's set, each start unplugs the
+  cable before the vCPUs run, so the licence page and first sign-in happen
+  offline. `VMManager.finishOfflineSetup` plugs it in and clears the flag:
+  - automatically, when the guest agent reports a signed-in desktop (WP4.4,
+    to build);
+  - by hand, with Connect to Network or `seemlessctl vm network finish-setup`.
+
+  The build itself still runs with no network device at all (docs/03).
+
 ## QMP client
 
 Implemented (M1): `kit/Sources/SeemlessKit/QMPClient.swift`, a minimal async

@@ -124,11 +124,19 @@ struct VMCommands: Commands {
             Button("Force Power Off") { model.shutDown(name, force: true) }
                 .disabled(!(item?.status.isActive ?? false))
             Divider()
+            // Unplugs or plugs in the virtual network cable (owner, 2026-11-24).
+            Button(item?.networkConnected == false ? "Connect to Network" : "Disconnect from Network") {
+                model.setNetwork(name, connected: item?.networkConnected == false)
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+            .disabled(item?.networkConnected == nil || model.busy.contains(name))
+            Divider()
             Button(model.isInZen(name) ? "Exit Zen Mode" : "Enter Zen Mode (Preview)") {
                 model.isInZen(name) ? model.exitZen(name) : model.enterZen(name)
             }
             .keyboardShortcut("z", modifiers: [.command, .control])
-            .disabled(!(item?.status.isActive ?? false))
+            // Zen needs the guest agent's window list; quarantine may leave it out.
+            .disabled(!(item?.status.isActive ?? false) || item?.config.allows(.agent) == false)
             Button("Show Display") { model.showDisplay(name) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
                 .disabled(!(item?.status.isActive ?? false))

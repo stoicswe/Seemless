@@ -20,7 +20,12 @@ public struct ImageBuilder: Sendable {
         public var display: LaunchOptions.Display = .cocoaWindow
         public var timeout: Duration = .seconds(120 * 60)
         public var drivers: URL?
+        /// Agent folder copied into Windows and installed at first boot.
+        /// nil: the guest tools' agent (`GuestTools.locate()`), so every VM
+        /// the pipeline builds gets the agent (WP4.3); see `installAgent`.
         public var agent: URL?
+        /// false: no agent at all, even if `GuestTools.locate()` finds one.
+        public var installAgent: Bool = true
         public var testSigning: Bool = false
 
         public init(iso: URL, vm: VMConfig) {
@@ -85,7 +90,12 @@ public struct ImageBuilder: Sendable {
         phase(.preparing)
         let store = VMStore(layout: layout, stack: stack)
         guard !store.exists(request.vm.name) else { throw BuildError.vmExists(request.vm.name) }
-        let files = try await store.create(request.vm)
+        // The first real start (licence page, first sign-in) runs offline
+        // too; the cable is plugged in once Windows reaches the desktop
+        // (owner, 2026-11-24; VMConfig.offlineUntilSetupDone).
+        var savedConfig = request.vm
+        savedConfig.offlineUntilSetupDone = true
+        let files = try await store.create(savedConfig)
         log("created VM '\(request.vm.name)' with a blank \(request.vm.diskSizeGiB) GiB disk")
 
         // One Windows account per VM; the Keychain entry is keyed by VM name
@@ -103,7 +113,14 @@ public struct ImageBuilder: Sendable {
         let payloadImage = files.directory.appending(path: "setup-payload.img")
         var extra: [String: URL] = [:]
         if let d = request.drivers { extra["seemless/drivers"] = d }
-        if let a = request.agent { extra["seemless/agent"] = a }
+        if request.installAgent, let a = request.agent ?? GuestTools.locate()?.agentDirectory {
+            extra["seemless/agent"] = a
+            let version = GuestTools(root: a.deletingLastPathComponent()).version
+            log("guest agent: \(a.path(percentEncoded: false))\(version.map { " (\($0))" } ?? "")")
+        } else {
+            log(request.installAgent ? "no guest agent found (build it with guest/tools/build.sh); Windows gets none"
+                                     : "guest agent left out (--no-agent)")
+        }
         try await SetupPayload(assets: assets, settings: settings).writeDiskImage(to: payloadImage, extraDirectories: extra)
         log("payload disk written: \(payloadImage.path(percentEncoded: false))")
         if !request.acceptWindowsLicense {

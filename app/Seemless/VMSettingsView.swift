@@ -46,6 +46,10 @@ struct VMSettingsView: View {
                     Picker("Direct3D backend", selection: $config.graphicsBackend) {
                         ForEach(VMConfig.GraphicsBackend.allCases, id: \.self) { Text(Format.graphics($0)) }
                     }
+                    if config.quarantine?.network == false {
+                        Label("Quarantine has the network off: the VM gets no network card.", systemImage: "shield.lefthalf.filled")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Network", selection: $config.network) {
                         Text(Format.network(.user)).tag(VMConfig.NetworkMode.user)
                         Text(Format.network(.vmnetShared)).tag(VMConfig.NetworkMode.vmnetShared)
@@ -59,6 +63,8 @@ struct VMSettingsView: View {
                     }
                 }
                 .disabled(locked)
+                QuarantineFields(config: $config)
+                    .disabled(locked)
                 let errors = config.validationErrors()
                 if !errors.isEmpty {
                     Section {

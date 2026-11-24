@@ -30,7 +30,7 @@ Preview 1 ships.
 
 | # | Item | Work packages | State / gate |
 |---|------|---------------|--------------|
-| P1 ◐ | **Self-contained, signed app**: QEMU, the graphics stack, swtpm and firmware inside `Seemless.app` (no `build/prefix`), Developer ID signing, hardened runtime with the hypervisor entitlement, notarization, a release zip/dmg, and GPL source offers plus third-party notices in the app | WP8.1, WP8.2, WP8.5 | Scripts done (2026-11-24, `docs/release.md`): the relocated app boots firmware with no `build/prefix` or Homebrew; every library is built from pinned source for macOS 26 (audit clean). Open: Developer ID signing + notarization have not run (needs the owner's identity) |
+| P1 ◐ | **Self-contained, signed app**: QEMU, the graphics stack, swtpm and firmware inside `Seemless.app` (no `build/prefix`), Developer ID signing, hardened runtime with the hypervisor entitlement, notarization, a release zip/dmg, and GPL source offers plus third-party notices in the app | WP8.1, WP8.2, WP8.5 | Scripts done (2026-11-24, `docs/release.md`): the relocated app boots firmware with no `build/prefix` or Homebrew; every library is built from pinned source for macOS 26 (audit clean). Signing: self-signed, not notarized for Preview 1 (owner); the owner creates the identity with `scripts/release/make-signing-cert.sh` |
 | P2 | **First run without Terminal**: pick an ISO, build the VM, the user accepts the Windows licence in the VM window, progress and errors in the app; desktop mode complete (typing, resize changes the guest resolution, HiDPI); audio out | WP3.4, WP3.2, WP3.5 (audio, scaling) | Fast Startup is already off in the image (S6b) |
 | P3 | **Agent in every VM**: WP4.2, then tools install and update (WP4.3), then host info, time sync and graceful shutdown (WP4.4) | WP4.2–4.4 | WP4.2 waits for the owner's CRT/SDK build (`guest/tools/build-agent.sh`) |
 | P4 | **Zen, experimental, on the real agent**: real windows (Z2: WP5.2 with WP5.1's model), input and focus with native cursor shapes (Z3: WP5.3), the clipboard both ways (WP4.5). Tier 2 (crop) only, labelled experimental | WP5.2, WP5.3, WP4.5 | After P3's WP4.2 |
@@ -101,7 +101,7 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 |----|------|------------|
 | WP4.1 ✅ | `proto/seemless.proto`, Swift and Rust codegen, framing, handshake; mock agent | Mock agent ↔ `AgentClient` round-trip tests on macOS |
 | WP4.2 | Rust service + session agent skeleton, vioserial transport, named pipe, supervision | `seemlessctl agent info` returns `GuestInfo` from a real VM |
-| WP4.3 | Guest tools ISO build + install/update flow | Version bump updates agent in place; survives logoff |
+| WP4.3 ✅ | Guest tools ISO build + install/update flow | Version bump updates agent in place; survives logoff |
 | WP4.4 | System messages: host info (resolution/DPI/work area/theme), time sync, shutdown, session state | Changing Mac appearance flips Windows theme; graceful shutdown works |
 | WP4.5 | Clipboard text/RTF/HTML/image both ways with lazy fetch and privacy rules | Manual matrix in `docs/testing/clipboard.md` passes |
 | WP4.6 | Windows driver build VM scripts (replaces dependence on UTM's prebuilt drivers) | Drivers built from pinned sources install and pass S2's check |

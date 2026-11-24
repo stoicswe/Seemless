@@ -187,6 +187,9 @@ public struct RunPaths: Sendable, Equatable {
     public var swtpmSocket: URL { directory.appending(path: "swtpm.sock") }
     public var qemuLog: URL { directory.appending(path: "qemu.log") }
     public var swtpmLog: URL { directory.appending(path: "swtpm.log") }
+    /// "connected" or "disconnected": the virtual network cable on this run
+    /// (`NetworkLink`). Missing means connected.
+    public var networkLink: URL { directory.appending(path: "network-link") }
 
     public var sockets: [URL] { [qmpSocket, controlSocket, inputSocket, agentSocket, bulkSocket, swtpmSocket] }
 }
@@ -229,7 +232,11 @@ public struct QEMUCommand: Sendable {
     /// The VM's persisted media (`VMConfig.media`, ids `m0`, `m1`, ...)
     /// followed by this launch's extra drives, in boot-priority order.
     public var removableDrives: [RemovableDrive] {
-        let persisted = config.media.enumerated().map { i, m in
+        // Quarantine with files off: no attached disks or ISOs. Drives for
+        // this launch only (the image build's installer and setup disk)
+        // still go in.
+        let attached = config.allows(.files) ? config.media : []
+        let persisted = attached.enumerated().map { i, m in
             RemovableDrive(id: "m\(i)", file: m.url, isCDROM: m.kind == .cdrom)
         }
         return persisted + options.removableDrives
@@ -288,7 +295,9 @@ public struct QEMUCommand: Sendable {
             a += ["-device", "usb-storage,bus=usb.0,drive=\(drive.id),removable=on,bootindex=\(index)"]
         }
 
-        switch config.network {
+        // Quarantine leaves out every device whose connection is off
+        // (VMConfig.allows, Quarantine).
+        switch config.effectiveNetwork {
         case .user:
             let forwards = config.portForwards
                 .map { ",hostfwd=\($0.proto.rawValue):127.0.0.1:\($0.hostPort)-:\($0.guestPort)" }
@@ -302,18 +311,22 @@ public struct QEMUCommand: Sendable {
             break
         }
 
-        a += ["-device", "virtio-serial-pci"]
-        a += ["-chardev", "socket,id=agent,path=\(p(run.agentSocket)),server=on,wait=off"]
-        a += ["-device", "virtserialport,chardev=agent,name=\(Self.agentPortName)"]
-        a += ["-chardev", "socket,id=bulk,path=\(p(run.bulkSocket)),server=on,wait=off"]
-        a += ["-device", "virtserialport,chardev=bulk,name=\(Self.bulkPortName)"]
+        if config.allows(.agent) {
+            a += ["-device", "virtio-serial-pci"]
+            a += ["-chardev", "socket,id=agent,path=\(p(run.agentSocket)),server=on,wait=off"]
+            a += ["-device", "virtserialport,chardev=agent,name=\(Self.agentPortName)"]
+            a += ["-chardev", "socket,id=bulk,path=\(p(run.bulkSocket)),server=on,wait=off"]
+            a += ["-device", "virtserialport,chardev=bulk,name=\(Self.bulkPortName)"]
+        }
 
         if config.boot.tpm {
             a += ["-chardev", "socket,id=tpm,path=\(p(run.swtpmSocket))"]
             a += ["-tpmdev", "emulator,id=tpm0,chardev=tpm", "-device", "tpm-tis-device,tpmdev=tpm0"]
         }
 
-        a += ["-audiodev", "coreaudio,id=a0", "-device", "usb-audio,bus=usb.0,audiodev=a0"]
+        if config.allows(.audio) {
+            a += ["-audiodev", "coreaudio,id=a0", "-device", "usb-audio,bus=usb.0,audiodev=a0"]
+        }
         a += ["-rtc", "base=localtime"]
         if let serial = options.serialLog {
             a += ["-serial", "file:\(p(serial))"]

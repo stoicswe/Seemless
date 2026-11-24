@@ -10,6 +10,9 @@ final class AppModel {
     struct Item: Identifiable, Equatable {
         var config: VMConfig
         var status: VMManager.Status
+        /// The running VM's virtual network cable: nil when stopped or
+        /// without a network (docs/02 "Network link").
+        var networkConnected: Bool? = nil
         var id: String { config.name }
     }
 
@@ -161,7 +164,9 @@ final class AppModel {
         let listed = await manager.list()
         var next: [Item] = []
         for config in listed.configs {
-            next.append(Item(config: config, status: await manager.status(of: config.name)))
+            let status = await manager.status(of: config.name)
+            let link = status.isActive ? await manager.isNetworkConnected(config.name) : nil
+            next.append(Item(config: config, status: status, networkConnected: link))
         }
         if next != items { items = next }
         if !welcomeDecided {
@@ -249,6 +254,18 @@ final class AppModel {
         }
     }
 
+    /// Plugs the VM's network cable in or out (Machine menu). Connecting a
+    /// VM that is still in its offline first setup also ends that setup, so
+    /// it starts online from then on.
+    func setNetwork(_ name: String, connected: Bool) {
+        let offlineSetup = item(name)?.config.offlineUntilSetupDone == true
+        let verb = connected ? "connect" : "disconnect"
+        perform(name, "Couldn’t \(verb) “\(name)” \(connected ? "to" : "from") the network") { m in
+            if connected, offlineSetup { try await m.finishOfflineSetup(name) }
+            else { try await m.setNetworkConnected(name, connected) }
+        }
+    }
+
     func pause(_ name: String) { perform(name, "Couldn’t pause “\(name)”") { try await $0.pause(name) } }
     func resume(_ name: String) { perform(name, "Couldn’t resume “\(name)”") { try await $0.resume(name) } }
     func restart(_ name: String) { perform(name, "Couldn’t restart “\(name)”") { try await $0.reset(name) } }
@@ -320,6 +337,11 @@ final class AppModel {
             return
         }
         let env = ProcessInfo.processInfo.environment
+        if item(name)?.config.allows(.agent) == false, env["SEEMLESS_ZEN_AGENT"] == nil {
+            error = AppError(title: "Zen mode needs the guest agent",
+                             message: "“\(name)” is quarantined with its guest agent off. Turn it on in Settings ▸ Quarantine, then restart the VM.")
+            return
+        }
         let agentSocket = env["SEEMLESS_ZEN_AGENT"].map { URL(filePath: $0) } ?? remote.record.run.agentSocket
         let scale = env["SEEMLESS_ZEN_SCALE"].flatMap(Double.init).map { CGFloat($0) } ?? 1
         // Zen and the desktop window are two views of one screen and share

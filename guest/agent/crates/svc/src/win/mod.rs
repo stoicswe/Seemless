@@ -9,6 +9,8 @@
 
 pub mod info;
 pub mod supervisor;
+pub mod system;
+pub mod tools;
 
 use std::path::PathBuf;
 use std::ptr::null_mut;
@@ -59,11 +61,14 @@ fn serve_until_stopped(supervise: bool) {
     let _ = STOP.set(Mutex::new(tx.clone()));
     crate::log(&format!("{build} starting; control port {CONTROL_PORT}"));
 
-    let version = build.clone();
-    let router = Router::new(build, move || info::guest_info(&version));
+    let router = Router::new(build.clone(), tools::WinSystem { agent_version: build });
     if let Err(e) = serve::spawn_host_link(tx.clone(), || transport::win::open_serial(CONTROL_PORT), Duration::from_secs(1)) {
         crate::log(&format!("host link thread: {e}"));
         return;
+    }
+
+    if let Err(e) = system::spawn_poller(tx.clone()) {
+        crate::log(&format!("session-state thread: {e}"));
     }
 
     let supervisor = match transport::win::PipeServer::new() {

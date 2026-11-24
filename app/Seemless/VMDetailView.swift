@@ -72,6 +72,10 @@ private struct HeaderView: View {
             // Line 2: state and provenance, on one baseline.
             HStack(spacing: 8) {
                 StatusBadge(state: item.status.state)
+                if item.config.isQuarantined {
+                    QuarantineBadge()
+                        .help("Quarantined: only the connections switched on in Settings reach your Mac.")
+                }
                 if let since = item.status.startedAt, item.status.isActive {
                     Text("since \(since.formatted(date: .omitted, time: .shortened))")
                         .font(.callout)
@@ -223,7 +227,9 @@ private struct HardwareSection: View {
                 }
                 InfoRow("Graphics", Format.graphics(c.graphicsBackend))
                 InfoRow("Network") {
-                    Text(Format.network(c.network) + (c.portForwards.isEmpty ? "" : " · \(c.portForwards.count) forwards"))
+                    Text(c.isQuarantined && !c.allows(.network)
+                         ? "Off (quarantined)"
+                         : Format.network(c.network) + (c.portForwards.isEmpty ? "" : " · \(c.portForwards.count) forwards"))
                 }
             }
         }
@@ -329,7 +335,12 @@ private struct MediaSection: View {
                             .disabled(!stopped)
                     }
                 }
-                if stopped {
+                if !item.config.allows(.files) {
+                    Label("Quarantined: attaching disks and ISOs is off (Settings ▸ Quarantine ▸ Files).",
+                          systemImage: "shield.lefthalf.filled")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if stopped {
                     ISODropZone(prompt: item.config.media.isEmpty
                                 ? "Drop a Windows ISO or disk image to attach it"
                                 : "Drop another ISO or image",

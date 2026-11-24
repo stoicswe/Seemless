@@ -110,9 +110,9 @@ over unix sockets; only the `win` modules are Windows-only.
   `%ProgramData%\Seemless\logs\agent-svc.log` (one `.1` kept past 1 MiB).
 - **Host link.** The service opens the control port, sends `Hello`, and
   reopens the port 1 s after it fails (missing driver, read error). It answers
-  `Hello`, `Ping` and `GetGuestInfo` itself; `SetHostInfo`, `TimeSync`,
-  `Shutdown`, `UpdateTools` and `RunCommand` get `Error UNSUPPORTED` until
-  their work packages (WP4.3/4.4); window, app, clipboard and drag requests
+  `Hello`, `Ping`, `GetGuestInfo` and `UpdateTools` (WP4.3) itself;
+  `SetHostInfo`, `TimeSync`, `Shutdown` and `RunCommand` get `Error
+  UNSUPPORTED` until their work packages (WP4.4); window, app, clipboard and drag requests
   are forwarded to the session agent (`UNSUPPORTED` when none is running).
   A host `Hello` with `reply_to = 0` starts a new host connection: seqs
   restart at 1 and requests in flight across the service are dropped.
@@ -148,11 +148,15 @@ over unix sockets; only the `win` modules are Windows-only.
   `Error UNSUPPORTED`. Log: `%LOCALAPPDATA%\Seemless\logs\agent.log`.
 - **Install.** `guest/tools/build-agent.sh` builds both binaries
   (cargo-xwin) and stages `build/guest-tools/agent/` (binaries,
-  `install.cmd`, `uninstall.cmd`, `version.txt`). `seemlessctl image build
+  `install.cmd`, `uninstall.cmd`, `version.txt`). The C runtime is linked
+  statically (`guest/agent/.cargo/config.toml`, `+crt-static`): a clean
+  Windows has no `VCRUNTIME140.dll`, and the first dynamically linked build
+  never started there. The exes import only system DLLs; check with
+  `llvm-objdump -p <exe> | grep "DLL Name"`. Redistribution: docs/10 Q12. `seemlessctl image build
   --agent build/guest-tools/agent` copies it to `%ProgramFiles%\Seemless`
   (apply.cmd) and `firstboot.cmd` runs `install.cmd` (`sc create`, failure
   restarts, `sc start`). The vioserial driver comes from `--drivers`. In-place
-  updates are WP4.3.
+  updates: "Guest tools ISO" below.
 
 ## Message catalogue (v1)
 
@@ -235,21 +239,60 @@ host temp directory that is visible to the guest, and vice versa).
 
 ## Guest tools ISO
 
-`seemless-tools.iso` (built by `guest/tools/build.sh`, shipped inside the app
-bundle):
+`seemless-tools.iso` (volume label `SEEMLESS_TOOLS`), built by
+`guest/tools/build.sh` into `build/guest-tools/` (WP4.3):
 
 ```
-/agent/         seemless-agent-svc.exe, seemless-agent.exe, rules.toml, version.json
-/drivers/       netkvm, vioserial, viofs, viogpu3d (+Triton UMD), viosnd ... (ARM64, .inf/.sys/.cat)
-/redist/        VC++ runtimes, DirectX legacy redist, WebView2 runtime installer (if licence allows bundling; else fetched by winget at first boot)
-/install.cmd    idempotent installer used by firstboot and by updates
-/uninstall.cmd
+/install.cmd    installs or updates everything below (guest/tools/install.cmd); /update = started by the service
+/uninstall.cmd  removes the agent service
+/version.txt    tools version, e.g. "0.0.2 (8bc3fb59e430)"
+/agent/         seemless-agent-svc.exe, seemless-agent.exe, install.cmd, uninstall.cmd, version.txt
+/drivers/       only with build.sh --drivers <dir> (pnputil /add-driver /subdirs /install)
 ```
 
-Update flow: host attaches the ISO as a CD-ROM → sends `UpdateTools` → the
-service runs `install.cmd` (stops session agent, replaces binaries via
-rename-and-restart, `pnputil` for drivers, restarts) → reconnect with new
-`Hello`. A driver update that needs a reboot is reported, not forced.
+Not on it yet: `rules.toml` (Z2), redistributables (VC++, DirectX legacy,
+WebView2: docs/10 Q7). Drivers stay opt-in until Q1/Q13 settle what may be
+redistributed.
+
+**Version.** The tools version is the agent's Hello build without the
+binary name: `seemless-agent-svc 0.0.2 (8bc3fb59e430)` → `0.0.2
+(8bc3fb59e430)` (workspace version + git rev, `+dirty` for an uncommitted
+tree). `build-agent.sh` writes it to `version.txt`; the host compares it
+with the running agent's Hello (`seemlessctl tools info`).
+
+**Every new VM** gets the agent: `image build` (CLI and app) copies the
+guest tools' `agent/` folder into Windows unless `--no-agent`, and
+`firstboot.cmd` runs its `install.cmd`. The folder is found by
+`GuestTools.locate()`: `$SEEMLESS_GUEST_TOOLS`, the app bundle's
+`Resources/guest-tools`, or `build/guest-tools`; `--agent <dir>` overrides.
+
+**Update flow** (`seemlessctl tools update --name <vm>`,
+`VMManager.updateTools`):
+
+1. Connect, read the installed version from the Hello; stop if it matches
+   (unless `--force`).
+2. Hot-plug the ISO over QMP as a USB CD-ROM (`usb-bot` + `scsi-cd`, ids
+   `sltoolsbot`/`sltoolsdev`, node `sltools`), so Windows mounts it as a CD.
+3. Send `UpdateTools { iso_volume_label: "SEEMLESS_TOOLS", version }`. The
+   service validates both fields (label 1–32 of `A-Z a-z 0-9 _ -`, version
+   1–64 printable ASCII), finds the drive by label, checks that its
+   `version.txt` equals `version` and that `install.cmd` exists, then starts
+   `cmd /c install.cmd /update` in its own process group (log:
+   `%ProgramData%\Seemless\logs\tools-update.log`) and replies `Ack`.
+   Until Windows has mounted the CD the reply is `Error INTERNAL "no volume
+   labelled …"`; the host retries that for 30 s.
+4. `install.cmd /update` waits 2 s (so the `Ack` reaches the host), stops
+   the service (waiting up to 30 s for STOPPED; the service ends the
+   session agent), renames the running `.exe`s to `.old` and copies the new
+   ones (a rename works on a running image, so a slow session agent cannot
+   block it; the copy is rolled back if it fails), then starts the service.
+   The SCM does not kill a stopped service's child, so the script outlives
+   the service it stops.
+5. The new service sends `Hello`; the host reconnects until the Hello
+   carries the new version (default 180 s), then unplugs the CD.
+
+A driver update that needs a reboot is logged (pnputil exit 3010), not
+forced. A quarantined VM with its agent connection off refuses updates.
 
 ## Host side: `AgentClient` (SeemlessKit)
 

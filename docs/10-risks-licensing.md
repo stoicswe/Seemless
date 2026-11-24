@@ -107,13 +107,17 @@ Flagged for the owner; none decided here.
 
 ## Distribution
 
-- Developer ID-signed, notarized DMG and zip (`scripts/package-release.sh`,
-  `docs/release.md`); Sparkle updates later (WP8.3).
+- Preview 1: DMG and zip signed with a self-signed certificate, not
+  notarized (owner, 2026-11-24); testers allow the app once in System
+  Settings. Later: Developer ID-signed and notarized
+  (`scripts/package-release.sh`, `docs/release.md`); Sparkle updates later
+  (WP8.3).
 - Entitlements (WP8.2, checked 2026-11-24): `com.apple.security.hypervisor`
   on `qemu-system-aarch64` only. No `allow-jit`: we only run `-accel hvf`,
   and the firmware boots under the hardened runtime without it. No
-  library-validation or DYLD exceptions in Developer ID builds (ad-hoc local
-  builds add `disable-library-validation`, because ad-hoc code has no Team
-  ID). `com.apple.vm.networking` only if granted.
+  library-validation or DYLD exceptions in Developer ID builds. Ad-hoc and
+  self-signed builds (Preview 1) add `disable-library-validation`, because
+  that code has no Team ID; this weakens protection against injected
+  libraries until a Developer ID replaces the self-signed certificate. `com.apple.vm.networking` only if granted.
 - Mac App Store is out: sandbox constraints on child processes,
   optional user-supplied frameworks loaded at runtime, and GPL terms.

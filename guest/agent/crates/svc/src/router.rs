@@ -28,20 +28,101 @@ use std::collections::HashMap;
 
 use proto::handshake::{self, capability, Negotiated};
 use proto::v1::envelope::Body;
-use proto::v1::{error, Envelope, Error as ProtoError, GuestInfo, Hello, Pong, Role};
+use proto::v1::{
+    error, shutdown, Ack, Envelope, Error as ProtoError, GuestInfo, Hello, Pong, Role, SessionState, SetHostInfo, TimeSync,
+    UpdateTools,
+};
 
 /// Requests in flight across the service, per direction.
 pub const MAX_PENDING: usize = 1024;
 
-/// Where `GuestInfo` comes from (the registry on Windows, a fixture in tests).
-pub trait GuestInfoSource {
+/// Longest `UpdateTools.iso_volume_label` accepted (ISO 9660 allows 32).
+pub const MAX_VOLUME_LABEL: usize = 32;
+/// Longest `UpdateTools.version` accepted.
+pub const MAX_TOOLS_VERSION: usize = 64;
+
+/// What the router asks of the machine: the registry and processes on
+/// Windows, fixtures in tests. Every method gets arguments the router has
+/// already validated, and must return quickly (start work, don't wait).
+pub trait System {
     fn guest_info(&self) -> GuestInfo;
+
+    /// Starts the tools update from the volume labelled `label`, whose
+    /// `version.txt` must read `version` (docs/06 "Guest tools ISO").
+    /// `Err` is the reason the update did not start.
+    fn update_tools(&mut self, label: &str, version: &str) -> Result<(), String> {
+        let _ = (label, version);
+        Err("tools updates are not supported here".into())
+    }
+
+    /// Sets the system clock to `unix_nanos` (already range-checked).
+    fn set_time(&mut self, unix_nanos: i64) -> Result<(), String> {
+        let _ = unix_nanos;
+        Err("setting the clock is not supported here".into())
+    }
+
+    /// Starts a shutdown, restart or sign-out a moment from now (so the
+    /// `Ack` can leave first). Hibernate never reaches this (docs/06).
+    fn shutdown(&mut self, mode: shutdown::Mode) -> Result<(), String> {
+        let _ = mode;
+        Err("shutdown is not supported here".into())
+    }
 }
 
-impl<F: Fn() -> GuestInfo> GuestInfoSource for F {
+/// A closure that returns `GuestInfo` is a `System` with nothing else (tests).
+impl<F: Fn() -> GuestInfo> System for F {
     fn guest_info(&self) -> GuestInfo {
         self()
     }
+}
+
+/// Earliest and latest clock a `TimeSync` may set (2020-01-01, 2200-01-01).
+pub const MIN_TIME_NANOS: i64 = 1_577_836_800 * 1_000_000_000;
+pub const MAX_TIME_NANOS: i64 = 7_258_118_400 * 1_000_000_000;
+/// Bounds on `SetHostInfo` (host data, but bounded like everything else).
+pub const MAX_HOST_DISPLAYS: usize = 16;
+pub const MAX_HOST_INFO_TEXT: usize = 128;
+
+pub fn validate_time_sync(t: &TimeSync) -> Result<(), String> {
+    if (MIN_TIME_NANOS..=MAX_TIME_NANOS).contains(&t.unix_nanos) {
+        Ok(())
+    } else {
+        Err(format!("time {} ns is outside 2020-2200", t.unix_nanos))
+    }
+}
+
+pub fn validate_host_info(h: &SetHostInfo) -> Result<(), String> {
+    if h.displays.len() > MAX_HOST_DISPLAYS {
+        return Err(format!("at most {MAX_HOST_DISPLAYS} displays"));
+    }
+    for (what, text) in [("locale", &h.locale), ("keyboard_layout", &h.keyboard_layout), ("timezone", &h.timezone)] {
+        if text.len() > MAX_HOST_INFO_TEXT || text.chars().any(char::is_control) {
+            return Err(format!("{what} must be at most {MAX_HOST_INFO_TEXT} printable characters"));
+        }
+    }
+    if !(h.scale == 0.0 || (0.5..=8.0).contains(&h.scale)) {
+        return Err("scale must be 0 (unknown) or 0.5-8".into());
+    }
+    Ok(())
+}
+
+/// Checks a host `UpdateTools` before anything touches the disk.
+pub fn validate_update_tools(u: &UpdateTools) -> Result<(), String> {
+    let label = &u.iso_volume_label;
+    if label.is_empty() || label.len() > MAX_VOLUME_LABEL {
+        return Err(format!("volume label must be 1-{MAX_VOLUME_LABEL} characters"));
+    }
+    if !label.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return Err("volume label may only hold A-Z, a-z, 0-9, '_' and '-'".into());
+    }
+    let v = &u.version;
+    if v.is_empty() || v.len() > MAX_TOOLS_VERSION {
+        return Err(format!("version must be 1-{MAX_TOOLS_VERSION} characters"));
+    }
+    if !v.bytes().all(|b| (0x20..0x7f).contains(&b)) {
+        return Err("version must be printable ASCII".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -54,6 +135,8 @@ pub enum Input {
     SessionConnected,
     Session(Envelope),
     SessionClosed,
+    /// The console session now (polled by the service every few seconds).
+    SessionState(SessionState),
 }
 
 #[derive(Debug, PartialEq)]
@@ -75,13 +158,17 @@ enum SessionLink {
 
 pub struct Router {
     build: String,
-    info: Box<dyn GuestInfoSource + Send>,
+    system: Box<dyn System + Send>,
     host_seq: u64,
     /// The host's Hello on the current connection, once received.
     host_hello: Option<Hello>,
     host_negotiated: Option<Negotiated>,
     /// Capabilities in the last Hello we sent the host.
     advertised: Vec<String>,
+    /// The console session as last reported by the machine.
+    session_state: Option<SessionState>,
+    /// The host's last `SetHostInfo`, replayed to each new session agent.
+    host_info: Option<SetHostInfo>,
     session: SessionLink,
     session_seq: u64,
     /// pipe seq of a forwarded host request → host seq.
@@ -91,14 +178,16 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new(build: impl Into<String>, info: impl GuestInfoSource + Send + 'static) -> Self {
+    pub fn new(build: impl Into<String>, system: impl System + Send + 'static) -> Self {
         Self {
             build: build.into(),
-            info: Box::new(info),
+            system: Box::new(system),
             host_seq: 0,
             host_hello: None,
             host_negotiated: None,
-            advertised: vec![capability::CORE.to_owned()],
+            advertised: base_capabilities(),
+            session_state: None,
+            host_info: None,
             session: SessionLink::None,
             session_seq: 0,
             to_session: HashMap::new(),
@@ -137,6 +226,16 @@ impl Router {
             }
             Input::Session(env) => self.on_session(env, &mut out),
             Input::SessionClosed => self.drop_session(&mut out, "session agent exited"),
+            Input::SessionState(state) => {
+                if self.session_state.as_ref() != Some(&state) {
+                    out.push(Output::Log(format!(
+                        "console session: logged_on={} locked={} user={:?}",
+                        state.logged_on, state.locked, state.user
+                    )));
+                    self.session_state = Some(state);
+                    self.send_session_state(&mut out);
+                }
+            }
         }
         out
     }
@@ -211,14 +310,64 @@ impl Router {
         match body {
             Body::Ping(p) => self.reply_host(out, env.seq, Body::Pong(Pong { nonce: p.nonce })),
             Body::GetGuestInfo(_) => {
-                let info = self.info.guest_info();
+                let info = self.system.guest_info();
                 self.reply_host(out, env.seq, Body::GuestInfo(info));
             }
-            // System family (WP4.3/WP4.4) and diagnostics: not built yet.
-            Body::SetHostInfo(_) => self.reply_host(out, env.seq, Self::unsupported("SetHostInfo")),
-            Body::TimeSync(_) => self.reply_host(out, env.seq, Self::unsupported("TimeSync")),
-            Body::Shutdown(_) => self.reply_host(out, env.seq, Self::unsupported("Shutdown")),
-            Body::UpdateTools(_) => self.reply_host(out, env.seq, Self::unsupported("UpdateTools")),
+            Body::UpdateTools(u) => {
+                let reply = match validate_update_tools(&u) {
+                    Err(why) => Body::Error(ProtoError { code: error::Code::Invalid as i32, message: why }),
+                    Ok(()) => match self.system.update_tools(&u.iso_volume_label, &u.version) {
+                        Ok(()) => {
+                            out.push(Output::Log(format!("tools update to {} started from volume {}", u.version, u.iso_volume_label)));
+                            Body::Ack(Ack {})
+                        }
+                        Err(why) => {
+                            out.push(Output::Log(format!("tools update to {} not started: {why}", u.version)));
+                            Body::Error(ProtoError { code: error::Code::Internal as i32, message: why })
+                        }
+                    },
+                };
+                self.reply_host(out, env.seq, reply);
+            }
+            Body::TimeSync(t) => {
+                let reply = match validate_time_sync(&t) {
+                    Err(why) => Body::Error(ProtoError { code: error::Code::Invalid as i32, message: why }),
+                    Ok(()) => match self.system.set_time(t.unix_nanos) {
+                        Ok(()) => Body::Ack(Ack {}),
+                        Err(why) => Body::Error(ProtoError { code: error::Code::Internal as i32, message: why }),
+                    },
+                };
+                self.reply_host(out, env.seq, reply);
+            }
+            Body::Shutdown(sd) => {
+                let reply = match shutdown::Mode::try_from(sd.mode) {
+                    Ok(shutdown::Mode::Hibernate) => Self::unsupported("Shutdown HIBERNATE"),
+                    Ok(mode @ (shutdown::Mode::Shutdown | shutdown::Mode::Restart | shutdown::Mode::Logoff)) => {
+                        match self.system.shutdown(mode) {
+                            Ok(()) => {
+                                out.push(Output::Log(format!("host asked for {}", mode.as_str_name())));
+                                Body::Ack(Ack {})
+                            }
+                            Err(why) => Body::Error(ProtoError { code: error::Code::Internal as i32, message: why }),
+                        }
+                    }
+                    _ => Body::Error(ProtoError { code: error::Code::Invalid as i32, message: format!("unknown shutdown mode {}", sd.mode) }),
+                };
+                self.reply_host(out, env.seq, reply);
+            }
+            Body::SetHostInfo(h) => {
+                let reply = match validate_host_info(&h) {
+                    Ok(()) => {
+                        // Applied by the session agent (theme is per user);
+                        // kept for the next one if none is running.
+                        self.host_info = Some(h);
+                        self.send_host_info(out);
+                        Body::Ack(Ack {})
+                    }
+                    Err(why) => Body::Error(ProtoError { code: error::Code::Invalid as i32, message: why }),
+                };
+                self.reply_host(out, env.seq, reply);
+            }
             Body::RunCommand(_) => self.reply_host(out, env.seq, Self::unsupported("RunCommand")),
             body if is_session_request(&body) => self.forward_to_session(env.seq, body, out),
             // Pong, or a guest→host message sent the wrong way.
@@ -239,6 +388,9 @@ impl Router {
                 self.host_negotiated = Some(n);
                 self.host_hello = Some(hello);
                 self.announce_host_to_session(out);
+                // A new host learns the console session right away (the
+                // offline first setup waits for a signed-in desktop).
+                self.send_session_state(out);
             }
             Err(e) => {
                 // Our Hello still went out, so the host sees the mismatch too
@@ -247,6 +399,28 @@ impl Router {
                 self.host_negotiated = None;
                 self.host_hello = None;
             }
+        }
+    }
+
+    fn send_session_state(&mut self, out: &mut Vec<Output>) {
+        if self.host_negotiated.is_none() {
+            return;
+        }
+        if let Some(state) = self.session_state.clone() {
+            let env = self.host_envelope(0, Body::SessionState(state));
+            out.push(Output::Host(env));
+        }
+    }
+
+    /// Sends the stored `SetHostInfo` to the session agent as a request of
+    /// the service's own; its reply matches no host request and is dropped.
+    fn send_host_info(&mut self, out: &mut Vec<Output>) {
+        if !self.session_ready() {
+            return;
+        }
+        if let Some(h) = self.host_info.clone() {
+            let seq = self.next_session_seq();
+            out.push(Output::Session(Envelope { seq, reply_to: 0, body: Some(Body::SetHostInfo(h)) }));
         }
     }
 
@@ -305,7 +479,7 @@ impl Router {
         }
         out.push(Output::Log(why.to_owned()));
         if was_ready {
-            self.set_advertised(vec![capability::CORE.to_owned()], out);
+            self.set_advertised(base_capabilities(), out);
         }
     }
 
@@ -335,10 +509,11 @@ impl Router {
                         self.session = SessionLink::Ready;
                         let ours = self.pipe_hello();
                         self.reply_session(out, env.seq, Body::Hello(ours));
-                        let mut all = vec![capability::CORE.to_owned()];
+                        let mut all = base_capabilities();
                         all.extend(caps);
                         self.set_advertised(all, out);
                         self.announce_host_to_session(out);
+                        self.send_host_info(out);
                     }
                     Ok(n) => out.push(Output::CloseSession(format!(
                         "session agent speaks {}.{}, the service {}.{}: install matching guest tools",
@@ -391,6 +566,14 @@ impl Router {
             }
         }
     }
+}
+
+/// What the service itself implements: core and the system family
+/// (GuestInfo, UpdateTools, TimeSync, Shutdown, SetHostInfo, SessionState).
+fn base_capabilities() -> Vec<String> {
+    let mut caps = vec![capability::CORE.to_owned(), capability::SYSTEM.to_owned()];
+    caps.sort();
+    caps
 }
 
 /// Capabilities the session agent may claim. Others are not forwarded.
@@ -468,7 +651,7 @@ fn body_name(body: &Body) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proto::v1::{Ack, GetGuestInfo, ListApps, OpenOnHost, Ping, WindowSnapshot};
+    use proto::v1::{Ack, Appearance, GetGuestInfo, ListApps, OpenOnHost, Ping, Shutdown, WindowSnapshot};
 
     fn info() -> GuestInfo {
         GuestInfo { os_build: "10.0.26300.1".into(), agent_version: "test".into(), ..Default::default() }
@@ -525,7 +708,7 @@ mod tests {
         assert_eq!((h[0].seq, h[0].reply_to), (1, 1));
         let Some(Body::Hello(ours)) = &h[0].body else { panic!() };
         assert_eq!(ours.role, Role::GuestService as i32);
-        assert_eq!(ours.capabilities, ["core.v1"]);
+        assert_eq!(ours.capabilities, ["core.v1", "system.v1"]);
         assert_eq!(r.host().unwrap().capabilities, ["core.v1"]);
     }
 
@@ -563,12 +746,184 @@ mod tests {
     }
 
     #[test]
-    fn system_requests_are_unsupported_for_now() {
+    fn run_command_is_unsupported_for_now() {
         let mut r = connected();
-        let out = r.handle(Input::Host(env(5, 0, Body::TimeSync(Default::default()))));
+        let out = r.handle(Input::Host(env(5, 0, Body::RunCommand(Default::default()))));
         let Some(Body::Error(e)) = &to_host(&out)[0].body else { panic!() };
         assert_eq!(e.code, error::Code::Unsupported as i32);
         assert_eq!(to_host(&out)[0].reply_to, 5);
+    }
+
+    #[derive(Default, Clone)]
+    struct Calls(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+    impl System for Calls {
+        fn guest_info(&self) -> GuestInfo {
+            info()
+        }
+        fn set_time(&mut self, unix_nanos: i64) -> Result<(), String> {
+            self.0.lock().unwrap().push(format!("time {unix_nanos}"));
+            Ok(())
+        }
+        fn shutdown(&mut self, mode: shutdown::Mode) -> Result<(), String> {
+            self.0.lock().unwrap().push(format!("shutdown {}", mode.as_str_name()));
+            Ok(())
+        }
+    }
+
+    fn with_calls() -> (Router, Calls) {
+        let calls = Calls::default();
+        let mut r = Router::new("svc test", calls.clone());
+        r.handle(Input::Host(env(1, 0, Body::Hello(host_hello()))));
+        (r, calls)
+    }
+
+    fn error_code(out: &[Output]) -> Option<i32> {
+        match &to_host(out).last()?.body {
+            Some(Body::Error(e)) => Some(e.code),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn advertises_the_system_family() {
+        let mut r = router();
+        let out = r.handle(Input::Host(env(1, 0, Body::Hello(host_hello()))));
+        let Some(Body::Hello(h)) = &to_host(&out)[0].body else { panic!() };
+        assert_eq!(h.capabilities, vec!["core.v1".to_owned(), "system.v1".to_owned()]);
+    }
+
+    #[test]
+    fn time_sync_is_range_checked() {
+        let (mut r, calls) = with_calls();
+        for bad in [0, -1, MIN_TIME_NANOS - 1, MAX_TIME_NANOS + 1, i64::MAX] {
+            let out = r.handle(Input::Host(env(2, 0, Body::TimeSync(TimeSync { unix_nanos: bad }))));
+            assert_eq!(error_code(&out), Some(error::Code::Invalid as i32), "{bad}");
+        }
+        let now = 1_795_000_000 * 1_000_000_000;
+        let out = r.handle(Input::Host(env(3, 0, Body::TimeSync(TimeSync { unix_nanos: now }))));
+        assert!(matches!(to_host(&out)[0].body, Some(Body::Ack(_))));
+        assert_eq!(calls.0.lock().unwrap().as_slice(), &[format!("time {now}")]);
+        // A machine that cannot set the clock says so.
+        let mut plain = connected();
+        let out = plain.handle(Input::Host(env(4, 0, Body::TimeSync(TimeSync { unix_nanos: now }))));
+        assert_eq!(error_code(&out), Some(error::Code::Internal as i32));
+    }
+
+    #[test]
+    fn shutdown_modes() {
+        let (mut r, calls) = with_calls();
+        let sd = |m: shutdown::Mode| Body::Shutdown(Shutdown { mode: m as i32 });
+        for (seq, m) in [(2, shutdown::Mode::Shutdown), (3, shutdown::Mode::Restart), (4, shutdown::Mode::Logoff)] {
+            let out = r.handle(Input::Host(env(seq, 0, sd(m))));
+            assert!(matches!(to_host(&out)[0].body, Some(Body::Ack(_))));
+        }
+        let out = r.handle(Input::Host(env(5, 0, sd(shutdown::Mode::Hibernate))));
+        assert_eq!(error_code(&out), Some(error::Code::Unsupported as i32));
+        for bad in [0, 99, -3] {
+            let out = r.handle(Input::Host(env(6, 0, Body::Shutdown(Shutdown { mode: bad }))));
+            assert_eq!(error_code(&out), Some(error::Code::Invalid as i32), "{bad}");
+        }
+        assert_eq!(calls.0.lock().unwrap().as_slice(), &["shutdown MODE_SHUTDOWN", "shutdown MODE_RESTART", "shutdown MODE_LOGOFF"]);
+    }
+
+    #[test]
+    fn host_info_is_kept_and_replayed_to_each_session_agent() {
+        let mut r = connected();
+        let info = SetHostInfo { appearance: Appearance::Dark as i32, scale: 2.0, ..Default::default() };
+        // No session agent: acked and kept.
+        let out = r.handle(Input::Host(env(2, 0, Body::SetHostInfo(info.clone()))));
+        assert!(matches!(to_host(&out)[0].body, Some(Body::Ack(_))));
+        assert!(to_session(&out).is_empty());
+        // A session agent connects: it gets the stored info after the handshake.
+        r.handle(Input::SessionConnected);
+        let out = r.handle(Input::Session(env(1, 0, Body::Hello(session_hello(&[])))));
+        assert!(to_session(&out).iter().any(|e| e.body == Some(Body::SetHostInfo(info.clone())) && e.reply_to == 0));
+        // Its reply matches no host request and is dropped.
+        let sent = to_session(&out).iter().find(|e| matches!(e.body, Some(Body::SetHostInfo(_)))).unwrap().seq;
+        let out = r.handle(Input::Session(env(2, sent, Body::Ack(Ack {}))));
+        assert!(to_host(&out).is_empty());
+        // A new SetHostInfo goes straight to the running agent.
+        let light = SetHostInfo { appearance: Appearance::Light as i32, ..Default::default() };
+        let out = r.handle(Input::Host(env(3, 0, Body::SetHostInfo(light.clone()))));
+        assert!(to_session(&out).iter().any(|e| e.body == Some(Body::SetHostInfo(light.clone()))));
+        // Bad input is refused.
+        for bad in [
+            SetHostInfo { locale: "x".repeat(129), ..Default::default() },
+            SetHostInfo { timezone: "Europe/\nBerlin".into(), ..Default::default() },
+            SetHostInfo { scale: 100.0, ..Default::default() },
+            SetHostInfo { displays: vec![Default::default(); 17], ..Default::default() },
+        ] {
+            let out = r.handle(Input::Host(env(4, 0, Body::SetHostInfo(bad))));
+            assert_eq!(error_code(&out), Some(error::Code::Invalid as i32));
+        }
+    }
+
+    #[test]
+    fn session_state_reaches_each_host_and_changes_are_sent_once() {
+        let mut r = router();
+        let state = SessionState { logged_on: true, locked: false, user: "Seemless".into(), secure_desktop: false };
+        // Before any host: kept, nothing sent.
+        let out = r.handle(Input::SessionState(state.clone()));
+        assert!(to_host(&out).is_empty());
+        // A host says Hello: our Hello reply, then the current state.
+        let out = r.handle(Input::Host(env(1, 0, Body::Hello(host_hello()))));
+        let sent = to_host(&out);
+        assert!(matches!(sent[0].body, Some(Body::Hello(_))));
+        assert_eq!(sent[1].body, Some(Body::SessionState(state.clone())));
+        assert_eq!(sent[1].reply_to, 0);
+        // Same state again: nothing. A change: one event.
+        assert!(to_host(&r.handle(Input::SessionState(state.clone()))).is_empty());
+        let locked = SessionState { locked: true, ..state };
+        let out = r.handle(Input::SessionState(locked.clone()));
+        assert_eq!(to_host(&out)[0].body, Some(Body::SessionState(locked)));
+    }
+
+    struct Updater(std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>, Result<(), String>);
+    impl System for Updater {
+        fn guest_info(&self) -> GuestInfo {
+            info()
+        }
+        fn update_tools(&mut self, label: &str, version: &str) -> Result<(), String> {
+            self.0.lock().unwrap().push((label.into(), version.into()));
+            self.1.clone()
+        }
+    }
+
+    fn update(label: &str, version: &str) -> Body {
+        Body::UpdateTools(UpdateTools { iso_volume_label: label.into(), version: version.into() })
+    }
+
+    #[test]
+    fn update_tools_is_validated_then_started() {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut r = Router::new("svc test", Updater(calls.clone(), Ok(())));
+        r.handle(Input::Host(env(1, 0, Body::Hello(host_hello()))));
+        for (seq, label, version) in [(2, "", "1"), (3, "SEEMLESS TOOLS", "1"), (4, "X:\\..", "1"), (5, "SEEMLESS_TOOLS", ""),
+                                      (6, "SEEMLESS_TOOLS", "1\n2"), (7, &"L".repeat(33), "1"), (8, "SEEMLESS_TOOLS", &"9".repeat(65))] {
+            let out = r.handle(Input::Host(env(seq, 0, update(label, version))));
+            let Some(Body::Error(e)) = &to_host(&out)[0].body else { panic!("{label:?} {version:?} accepted") };
+            assert_eq!(e.code, error::Code::Invalid as i32);
+        }
+        assert!(calls.lock().unwrap().is_empty(), "nothing invalid reaches the system");
+        let out = r.handle(Input::Host(env(9, 0, update("SEEMLESS_TOOLS", "0.0.2 (abc)"))));
+        assert!(matches!(to_host(&out)[0].body, Some(Body::Ack(_))));
+        assert_eq!(to_host(&out)[0].reply_to, 9);
+        assert_eq!(calls.lock().unwrap().as_slice(), &[("SEEMLESS_TOOLS".to_owned(), "0.0.2 (abc)".to_owned())]);
+    }
+
+    #[test]
+    fn update_tools_failure_is_reported() {
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut r = Router::new("svc test", Updater(calls, Err("no volume labelled SEEMLESS_TOOLS".into())));
+        r.handle(Input::Host(env(1, 0, Body::Hello(host_hello()))));
+        let out = r.handle(Input::Host(env(2, 0, update("SEEMLESS_TOOLS", "1"))));
+        let Some(Body::Error(e)) = &to_host(&out)[0].body else { panic!() };
+        assert_eq!(e.code, error::Code::Internal as i32);
+        assert!(e.message.contains("no volume"));
+        // The default System (a closure) has no updater.
+        let mut r = connected();
+        let out = r.handle(Input::Host(env(3, 0, update("SEEMLESS_TOOLS", "1"))));
+        assert!(matches!(&to_host(&out)[0].body, Some(Body::Error(e)) if e.code == error::Code::Internal as i32));
     }
 
     #[test]
@@ -602,7 +957,7 @@ mod tests {
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].reply_to, 0);
         let Some(Body::Hello(again)) = &h[0].body else { panic!() };
-        assert_eq!(again.capabilities, ["core.v1", "windows.v1"]);
+        assert_eq!(again.capabilities, ["core.v1", "system.v1", "windows.v1"]);
     }
 
     #[test]
@@ -645,7 +1000,7 @@ mod tests {
         assert_eq!(h[0].reply_to, 7);
         assert!(matches!(&h[0].body, Some(Body::Error(e)) if e.code == error::Code::Internal as i32));
         let Some(Body::Hello(hello)) = &h[1].body else { panic!("capabilities changed: fresh Hello") };
-        assert_eq!(hello.capabilities, ["core.v1"]);
+        assert_eq!(hello.capabilities, ["core.v1", "system.v1"]);
     }
 
     #[test]

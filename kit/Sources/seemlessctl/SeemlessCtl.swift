@@ -8,7 +8,7 @@ struct SeemlessCtl: AsyncParsableCommand {
         commandName: "seemlessctl",
         abstract: "Headless control of the Seemless Windows runtime.",
         version: Seemless.version,
-        subcommands: [VMCommand.self, ImageCommand.self, DiskCommand.self, StackCommand.self, AgentCommand.self,
+        subcommands: [VMCommand.self, ImageCommand.self, DiskCommand.self, StackCommand.self, AgentCommand.self, ToolsCommand.self,
                       MockAgentCommand.self, ScreenshotCommand.self, DisplayCommand.self, Paths.self]
     )
 }
@@ -79,7 +79,7 @@ struct AgentCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "agent",
         abstract: "Talk to the guest agent (docs/06).",
-        subcommands: [Hello.self, Info.self])
+        subcommands: [Hello.self, Info.self, Sync.self, Shutdown.self])
 
     struct Hello: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Exchange Hello and print what was negotiated.")
@@ -105,6 +105,119 @@ struct AgentCommand: AsyncParsableCommand {
             print("agent:    \(info.agentVersion)")
             print("gpu:      \(info.gpuAdapter)")
             for d in info.driverVersions { print("driver:   \(d.name) \(d.version)") }
+        }
+    }
+}
+
+// MARK: - tools
+
+struct ToolsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "tools",
+        abstract: "Guest tools: the agent every new VM gets, and in-place updates (docs/06).",
+        subcommands: [Info.self, Update.self])
+
+    struct ToolsLocation: ParsableArguments {
+        @Option(help: ArgumentHelp("Guest tools folder (agent/, seemless-tools.iso). Default: $SEEMLESS_GUEST_TOOLS, the app bundle's, or build/guest-tools.", valueName: "dir"))
+        var tools: String?
+
+        func resolve() throws -> GuestTools {
+            if let tools { return GuestTools(root: URL(filePath: tools, directoryHint: .isDirectory)) }
+            guard let found = GuestTools.locate() else {
+                throw ValidationError("no guest tools found; build them with guest/tools/build.sh or pass --tools <dir>")
+            }
+            return found
+        }
+    }
+
+    struct Info: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Print the guest tools' version and, if the VM is running, the version installed in it.")
+        @OptionGroup var location: ToolsLocation
+        @OptionGroup var vm: VMSelection
+
+        func run() async throws {
+            let tools = try location.resolve()
+            print("tools:     \(tools.version ?? "unknown") (\(tools.root.path(percentEncoded: false)))")
+            print("iso:       \(tools.hasISO ? tools.iso.path(percentEncoded: false) : "missing (guest/tools/build.sh)")")
+            guard VMRemote.attach(vm.files) != nil else { print("installed: (VM '\(vm.name)' is not running)"); return }
+            let installed = try await VMManager(layout: vm.layout, stack: try vm.stack()).installedToolsVersion(vm.name)
+            print("installed: \(installed)\(installed == tools.version ? " (up to date)" : " (update with `seemlessctl tools update`)")")
+        }
+    }
+
+    struct Update: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Update the agent in a running VM in place from the tools ISO.",
+            discussion: "Hot-plugs seemless-tools.iso as a CD, asks the agent service to run its install.cmd (which swaps the binaries and restarts the service), waits for the new agent's Hello, then unplugs the CD.")
+        @OptionGroup var location: ToolsLocation
+        @OptionGroup var vm: VMSelection
+        @Flag(help: "Reinstall even if the versions match.") var force = false
+        @Option(help: "Seconds to wait for the updated agent.") var timeout = 180
+
+        func run() async throws {
+            let tools = try location.resolve()
+            let manager = VMManager(layout: vm.layout, stack: try vm.stack())
+            let result = try await manager.updateTools(vm.name, tools: tools, force: force,
+                                                       returnTimeout: .seconds(timeout)) { line in
+                print("[\(Date().formatted(date: .omitted, time: .standard))] \(line)")
+            }
+            switch result.outcome {
+            case .upToDate: print("up to date: \(result.before)")
+            case .updated: print("updated: \(result.before) -> \(result.after)")
+            }
+        }
+    }
+}
+
+extension AgentCommand {
+    struct Sync: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "One agent-link sync: print the session state, set the clock, send the appearance (WP4.4).",
+            discussion: "What a running VM's owner (`vm run`, the app) does every few minutes and when the Mac's appearance changes.")
+        @OptionGroup var target: AgentTarget
+        @Option(help: "Appearance to send: light, dark or mac (the Mac's current one).") var appearance = "mac"
+
+        func validate() throws {
+            guard ["light", "dark", "mac"].contains(appearance) else { throw ValidationError("--appearance must be light, dark or mac") }
+        }
+
+        func run() async throws {
+            let socket: URL
+            if let s = target.socket { socket = URL(filePath: s) } else {
+                guard let remote = VMRemote.attach(target.vm.files) else { throw ValidationError("VM '\(target.vm.name)' is not running") }
+                socket = remote.record.run.agentSocket
+            }
+            var c = AgentLink.Configuration(socket: socket, finishSetupWhenSignedIn: false)
+            c.helloTimeout = .milliseconds(Int(target.timeout * 1000))
+            let link = AgentLink(c) {}
+            let mode: HostAppearance = appearance == "dark" ? .dark : appearance == "light" ? .light : HostAppearance.current
+            guard let r = await link.sync(appearance: mode) else { throw ValidationError("no agent answered") }
+            print("agent:      \(r.agentBuild)")
+            if let s = r.session {
+                print("session:    logged_on=\(s.loggedOn) locked=\(s.locked) user=\(AgentLink.printable(s.user)) signed-in desktop=\(AgentLink.isSignedInDesktop(s))")
+            } else {
+                print("session:    (not reported)")
+            }
+            print("time:       \(r.timeSynced ? "set to the Mac's clock" : "not set")")
+            print("appearance: \(r.appearanceSent.map { "\($0)" } ?? "not sent")")
+        }
+    }
+
+    struct Shutdown: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(abstract: "Ask Windows to shut down, restart or sign out through the agent (WP4.4).")
+        @OptionGroup var target: AgentTarget
+        @Option(help: "shutdown, restart or logoff.") var mode = "shutdown"
+
+        func run() async throws {
+            let modes: [String: Seemless_V1_Shutdown.Mode] = ["shutdown": .shutdown, "restart": .restart, "logoff": .logoff]
+            guard let m = modes[mode] else { throw ValidationError("--mode must be shutdown, restart or logoff") }
+            let client = try await target.connect()
+            defer { Task { await client.close() } }
+            var request = Seemless_V1_Shutdown()
+            request.mode = m
+            _ = try await client.request(.shutdown(request))
+            print("Windows acknowledged: \(mode)")
         }
     }
 }
@@ -139,7 +252,7 @@ struct VMCommand: AsyncParsableCommand {
         commandName: "vm",
         abstract: "Create, run and control the VM.",
         subcommands: [Create.self, Show.self, Set.self, Run.self, Status.self, Pause.self, Resume.self, Restart.self,
-                      Stop.self, Delete.self, Media.self, Firmware.self, Screendump.self, Open.self]
+                      Stop.self, Delete.self, Media.self, Firmware.self, Screendump.self, Open.self, Network.self, QuarantineCommand.self]
     )
 
     struct Create: AsyncParsableCommand {
@@ -150,12 +263,14 @@ struct VMCommand: AsyncParsableCommand {
         @Option(help: "Disk size in GiB for a blank disk.") var disk = 64
         @Option(help: ArgumentHelp("Golden image to back the system disk (overlay).", valueName: "base.qcow2")) var base: String?
         @Option(help: "Network: user, vmnet-shared or none.") var network = "user"
+        @Flag(help: "Quarantine: no connection to the Mac except keyboard, mouse and display (`vm quarantine` switches single connections on).")
+        var quarantine = false
 
         func run() async throws {
             guard let net = VMConfig.NetworkMode(rawValue: network) else {
                 throw ValidationError("--network must be user, vmnet-shared or none")
             }
-            var config = VMConfig(name: vm.name, diskSizeGiB: disk, network: net)
+            var config = VMConfig(name: vm.name, diskSizeGiB: disk, network: net, quarantine: quarantine ? .isolated : nil)
             if let cpus { config.cpuCount = cpus }
             if let memory { config.memoryMiB = memory }
             let files = try await vm.store().create(config, baseImage: base.map { URL(filePath: $0) })
@@ -204,6 +319,7 @@ struct VMCommand: AsyncParsableCommand {
         }
 
         func run() async throws {
+            setvbuf(stdout, nil, _IOLBF, 0) // progress lines reach a log file as they happen
             let stack = try vm.stack()
             let store = VMStore(layout: vm.layout, stack: stack)
             let config = try store.load(vm.name)
@@ -219,13 +335,37 @@ struct VMCommand: AsyncParsableCommand {
             let process = VMProcess(config: config, stack: stack, files: store.files(for: vm.name),
                                     options: options, runDirectory: runDir)
 
-            let stopper = SignalStopper(process)
+            let run = RunPaths(directory: runDir)
+            let stopper = SignalStopper(process, agentSocket: config.allows(.agent) ? run.agentSocket : nil)
             let watcher = Task {
                 for await state in process.states { print("state: \(state)") }
             }
             try await process.start(resume: !paused)
-            print("QEMU pid \(await process.qemuPID ?? 0); QMP \(RunPaths(directory: runDir).controlSocket.path(percentEncoded: false))")
+            print("QEMU pid \(await process.qemuPID ?? 0); QMP \(run.controlSocket.path(percentEncoded: false))")
+            // Clock, appearance and the end of an offline first setup (WP4.4).
+            var linkTask: Task<Void, Never>?
+            if config.allows(.agent), ProcessInfo.processInfo.environment["SEEMLESS_AGENT_LINK_SKIP"] != "all" {
+                let manager = VMManager(layout: vm.layout, stack: stack)
+                let name = vm.name
+                var c = AgentLink.Configuration(socket: run.agentSocket, finishSetupWhenSignedIn: config.offlineUntilSetupDone)
+                // Debugging switch: SEEMLESS_AGENT_LINK_SKIP=time,hostinfo
+                let skip = ProcessInfo.processInfo.environment["SEEMLESS_AGENT_LINK_SKIP"] ?? ""
+                c.sendTime = !skip.contains("time")
+                c.sendHostInfo = !skip.contains("hostinfo")
+                c.keepRunning = { [weak process] in
+                    guard let process else { return false }
+                    switch await process.state { case .stopped, .crashed: return false; default: return true }
+                }
+                let link = AgentLink(c, log: { print("[\(Date().formatted(date: .omitted, time: .standard))] \($0)") }) {
+                    do {
+                        try await manager.finishOfflineSetup(name)
+                        print("offline first setup finished: network connected")
+                    } catch { print("ending the offline setup failed: \(error)") }
+                }
+                linkTask = Task { await link.run() }
+            }
             await process.waitForExitIndefinitely()
+            linkTask?.cancel()
             stopper.cancel()
             watcher.cancel()
             if case .crashed(let why) = await process.state {
@@ -430,6 +570,121 @@ struct VMCommand: AsyncParsableCommand {
         }
     }
 
+    struct Network: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Plug the running VM's virtual network cable in or out (Windows sees the cable change).",
+            subcommands: [Status.self, Connect.self, Disconnect.self, FinishSetup.self])
+
+        struct Status: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(abstract: "Print connected, disconnected, or why there is no link.")
+            @OptionGroup var vm: VMSelection
+            func run() async throws {
+                let config = try vm.store().load(vm.name)
+                let remote = try vm.remote()
+                if config.effectiveNetwork == .none {
+                    print(config.network == .none ? "no network (network mode none)" : "no network (quarantined: network off)")
+                    return
+                }
+                print(NetworkLink.isConnected(run: remote.record.run) ? "connected" : "disconnected")
+                if config.offlineUntilSetupDone { print("offline first setup: waiting for the Windows desktop") }
+            }
+        }
+
+        struct Connect: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(abstract: "Plug the network cable in.")
+            @OptionGroup var vm: VMSelection
+            func run() async throws {
+                try await VMManager(layout: vm.layout, stack: vm.stack()).setNetworkConnected(vm.name, true)
+                print("connected")
+            }
+        }
+
+        struct Disconnect: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(abstract: "Unplug the network cable.")
+            @OptionGroup var vm: VMSelection
+            func run() async throws {
+                try await VMManager(layout: vm.layout, stack: vm.stack()).setNetworkConnected(vm.name, false)
+                print("disconnected")
+            }
+        }
+
+        struct FinishSetup: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "finish-setup",
+                abstract: "End an offline first setup: plug the cable in and start online from now on.")
+            @OptionGroup var vm: VMSelection
+            func run() async throws {
+                try await VMManager(layout: vm.layout, stack: vm.stack()).finishOfflineSetup(vm.name)
+                print("offline first setup finished; connected")
+            }
+        }
+    }
+
+    struct QuarantineCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "quarantine",
+            abstract: "A quarantined VM's connections to the Mac (off = no device; applies at the next start).",
+            subcommands: [Show.self, SetConnection.self, Lift.self])
+
+        struct Show: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(abstract: "Print each connection's state.")
+            @OptionGroup var vm: VMSelection
+            func run() async throws {
+                let config = try vm.store().load(vm.name)
+                guard config.isQuarantined else { print("not quarantined"); return }
+                for c in VMConfig.Connection.allCases { print("\(c.rawValue.padding(toLength: 17, withPad: " ", startingAt: 0)) \(config.allows(c) ? "on" : "off")") }
+            }
+        }
+
+        struct SetConnection: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(
+                commandName: "set",
+                abstract: "Switch one connection on or off (VM stopped).")
+            @OptionGroup var vm: VMSelection
+            @Argument(help: "network, agent, clipboardToGuest, clipboardToHost, files or audio.") var connection: String
+            @Argument(help: "on or off.") var state: String
+            func run() async throws {
+                guard let c = VMConfig.Connection(rawValue: connection) else {
+                    throw ValidationError("unknown connection; use one of: " + VMConfig.Connection.allCases.map(\.rawValue).joined(separator: ", "))
+                }
+                guard state == "on" || state == "off" else { throw ValidationError("state must be on or off") }
+                let manager = VMManager(layout: vm.layout, stack: try vm.stack())
+                var config = try manager.store.load(vm.name)
+                guard config.quarantine != nil else { throw ValidationError("'\(vm.name)' is not quarantined") }
+                let on = state == "on"
+                switch c {
+                case .network: config.quarantine?.network = on
+                case .agent: config.quarantine?.agent = on
+                case .clipboardToGuest: config.quarantine?.clipboardToGuest = on
+                case .clipboardToHost: config.quarantine?.clipboardToHost = on
+                case .files: config.quarantine?.files = on
+                case .audio: config.quarantine?.audio = on
+                }
+                try await manager.update(config)
+                print("\(c.rawValue) \(state) (applies at the next start)")
+                if (c == .clipboardToGuest || c == .clipboardToHost), on, config.quarantine?.agent != true {
+                    print("note: the clipboard also needs the agent connection on")
+                }
+            }
+        }
+
+        struct Lift: AsyncParsableCommand {
+            static let configuration = CommandConfiguration(
+                abstract: "End quarantine: the VM gets every connection a normal VM has at its next start (VM stopped).")
+            @OptionGroup var vm: VMSelection
+            @Flag(help: "Required: confirms that Windows may reach the Mac through every connection.") var yes = false
+            func run() async throws {
+                guard yes else { throw ValidationError("pass --yes to lift quarantine") }
+                let manager = VMManager(layout: vm.layout, stack: try vm.stack())
+                var config = try manager.store.load(vm.name)
+                guard config.quarantine != nil else { print("not quarantined"); return }
+                config.quarantine = nil
+                try await manager.update(config)
+                print("quarantine lifted for '\(vm.name)' (applies at the next start)")
+            }
+        }
+    }
+
     struct Resume: AsyncParsableCommand {
         static let configuration = CommandConfiguration(abstract: "Resume a paused VM.")
         @OptionGroup var vm: VMSelection
@@ -447,7 +702,12 @@ struct VMCommand: AsyncParsableCommand {
         @Option(help: "Seconds to wait for Windows to shut down before forcing it off.") var timeout = 60
         @Flag(help: "Power off immediately without asking Windows.") var force = false
         func run() async throws {
-            let how = try await vm.remote().stop(graceful: force ? .zero : .seconds(timeout))
+            let remote = try vm.remote()
+            if !force {
+                let manager = VMManager(layout: vm.layout, stack: try vm.stack())
+                if await manager.askAgentToShutDown(vm.name) { print("Windows is shutting down (asked through the agent)") }
+            }
+            let how = try await remote.stop(graceful: force ? .zero : .seconds(timeout))
             print("stopped (\(how.rawValue))")
         }
     }
@@ -519,9 +779,11 @@ struct ImageCommand: AsyncParsableCommand {
         @Option(help: "Disk size in GiB.") var disk = 64
         @Option(help: "Minutes to wait before forcing the VM off.") var timeout = 120
         @Option(help: ArgumentHelp("Folder of ARM64 drivers (.inf) to inject.", valueName: "dir")) var drivers: String?
-        @Option(help: ArgumentHelp("Folder of guest agent files to copy in.", valueName: "dir")) var agent: String?
+        @Option(help: ArgumentHelp("Folder of guest agent files to copy in (default: the guest tools' agent folder, see `tools info`).", valueName: "dir")) var agent: String?
+        @Flag(help: "Install no guest agent.") var noAgent = false
         @Flag(help: "Turn on Windows test signing (for test-signed drivers; docs/01 D12).") var testSigning = false
         @Flag(help: "No window (you cannot see or answer Windows' licence page).") var headless = false
+        @Flag(help: "Quarantine the new VM: no connection to the Mac except keyboard, mouse and display.") var quarantine = false
         @Flag(name: .customLong("accept-windows-license"),
               help: "I have read and accept Microsoft's Windows licence terms; skip the licence page.") var acceptLicense = false
 
@@ -532,7 +794,7 @@ struct ImageCommand: AsyncParsableCommand {
         }
 
         func run() async throws {
-            var config = VMConfig(name: vm.name, diskSizeGiB: disk)
+            var config = VMConfig(name: vm.name, diskSizeGiB: disk, quarantine: quarantine ? .isolated : nil)
             if let cpus { config.cpuCount = cpus }
             if let memory { config.memoryMiB = memory }
             var request = ImageBuilder.Request(iso: URL(filePath: iso).standardizedFileURL, vm: config)
@@ -544,6 +806,7 @@ struct ImageCommand: AsyncParsableCommand {
             request.timeout = .seconds(timeout * 60)
             request.drivers = drivers.map { URL(filePath: $0, directoryHint: .isDirectory) }
             request.agent = agent.map { URL(filePath: $0, directoryHint: .isDirectory) }
+            request.installAgent = !noAgent
             request.testSigning = testSigning
 
             let builder = ImageBuilder(layout: vm.layout, stack: try vm.stack(), assets: try ImageCommand.assets())
@@ -719,6 +982,11 @@ func printConfig(_ c: VMConfig) {
     print("mac      \(c.macAddress)")
     print("boot     \(c.boot.order.rawValue), tpm \(c.boot.tpm ? "on" : "off"), firmware wait \(c.boot.firmwareTimeoutSeconds) s")
     for m in c.media { print("media    \(m.kind.rawValue) \(m.path)\(m.exists ? "" : " (missing)")") }
+    if let q = c.quarantine {
+        let on = VMConfig.Connection.allCases.filter { c.allows($0) }.map(\.rawValue)
+        print("quarantine on; connections on: \(on.isEmpty ? "none" : on.joined(separator: ", "))\(q.agent ? "" : " (no guest agent)")")
+    }
+    if c.offlineUntilSetupDone { print("network  offline until Windows' first setup reaches the desktop") }
 }
 
 func gib(_ bytes: UInt64) -> String { String(format: "%.2f GiB", Double(bytes) / 1_073_741_824) }
@@ -728,7 +996,7 @@ final class SignalStopper: @unchecked Sendable {
     private var sources: [DispatchSourceSignal] = []
     private var count = 0
 
-    init(_ process: VMProcess) {
+    init(_ process: VMProcess, agentSocket: URL? = nil) {
         for sig in [SIGINT, SIGTERM] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
@@ -736,7 +1004,14 @@ final class SignalStopper: @unchecked Sendable {
                 count += 1
                 let force = count > 1
                 FileHandle.standardError.write(Data((force ? "\nforcing off...\n" : "\nshutting down (Ctrl-C again to force)...\n").utf8))
-                Task { await process.stop(graceful: force ? .zero : .seconds(60)) }
+                Task {
+                    // Windows shuts down cleanly through the agent (WP4.4);
+                    // the ACPI power button inside stop() is the fallback.
+                    if !force, let agentSocket, await AgentLink.requestShutdown(socket: agentSocket) {
+                        FileHandle.standardError.write(Data("Windows is shutting down (asked through the agent)\n".utf8))
+                    }
+                    await process.stop(graceful: force ? .zero : .seconds(60))
+                }
             }
             source.resume()
             sources.append(source)

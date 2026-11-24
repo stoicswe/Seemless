@@ -56,7 +56,10 @@ and shows each Windows window as a native Mac window. The plan lives in
   (pinned 1.99.1).
 - Agent logic tests (macOS): `~/.cargo/bin/cargo test --manifest-path guest/agent/Cargo.toml -p windows-model`
 - Agent Windows build (from M4; needs the target and cargo-xwin, see bootstrap):
-  `~/.cargo/bin/cargo xwin build --manifest-path guest/agent/Cargo.toml --target aarch64-pc-windows-msvc --release`
+  `guest/tools/build-agent.sh` (stages `build/guest-tools/agent`). By hand, run
+  cargo **inside `guest/agent`**: rustup picks the pinned toolchain by the
+  current directory, not by `--manifest-path`, and only 1.99.1 has the Windows
+  target: `cd guest/agent && ~/.cargo/bin/cargo xwin build --target aarch64-pc-windows-msvc --release`
 - Host stack (S1): `scripts/build-deps.sh fetch`, then `scripts/build-deps.sh all`
   (or named components; `--force <name>` to rebuild). Output in `build/prefix`,
   logs in `build/logs/`.
@@ -75,7 +78,10 @@ and shows each Windows window as a native Mac window. The plan lives in
 - Release app (P1, WP8.1/8.2/8.5; runbook `docs/release.md`):
   `scripts/package-release.sh` → `build/release/` (self-contained
   `Seemless.app`, dmg, zip; audit, ad-hoc signing without
-  `SEEMLESS_SIGN_IDENTITY`, notarization with `SEEMLESS_NOTARY_PROFILE`).
+  `SEEMLESS_SIGN_IDENTITY`; Preview 1 uses the owner's self-signed identity
+  from `scripts/release/make-signing-cert.sh`, not notarized. Never create
+  that identity yourself; test with a throwaway keychain and
+  `SEEMLESS_SIGN_KEYCHAIN`).
   `scripts/release/source-archive.sh` writes the source offer. Every
   library in the app is built from pinned source (`build-deps.sh` builds
   GLib, OpenSSL & co. hermetically, without Homebrew's bottles); the

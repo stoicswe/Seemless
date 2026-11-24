@@ -101,6 +101,12 @@ public actor VMProcess {
             watchEvents(client)
             try RunningVM(qemuPID: qemu!.processIdentifier, swtpmPID: swtpm?.processIdentifier ?? 0,
                           runDirectory: run.directory.path(percentEncoded: false), startedAt: Date()).write(files)
+            // Offline first setup (owner, 2026-11-24): unplug the cable
+            // before the vCPUs run, so Windows never sees a network until
+            // its first setup reaches the desktop.
+            if config.offlineUntilSetupDone, config.effectiveNetwork != .none {
+                try await NetworkLink.set(connected: false, qmp: client, run: run)
+            }
             if resume {
                 try await client.cont()
                 set(.running)

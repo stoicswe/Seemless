@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds the guest agent for Windows ARM64 and stages the folder that
 # `seemlessctl image build --agent <dir>` copies into the image (docs/06,
-# WP4.2). The full tools ISO is WP4.3.
+# WP4.2). guest/tools/build.sh wraps this into seemless-tools.iso (WP4.3).
 #
 #   guest/tools/build-agent.sh [--out <dir>]     default: build/guest-tools/agent
 #
@@ -48,6 +48,9 @@ for f in install.cmd uninstall.cmd; do
   perl -pe 's/\r?\n/\r\n/' "guest/tools/agent/$f" > "$OUT/$f"
 done
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' guest/agent/Cargo.toml | head -1)"
-printf 'seemless-agent %s (%s)\r\n' "$version" "$rev" > "$OUT/version.txt"
+# The tools version: the agent's Hello build string without the binary
+# name ("seemless-agent-svc 0.0.2 (rev)" -> "0.0.2 (rev)"). The host
+# compares the two to decide whether a VM needs an update (WP4.3).
+printf '%s (%s)\r\n' "$version" "$rev" > "$OUT/version.txt"
 echo "staged in $OUT:"
 ls -l "$OUT"

@@ -44,6 +44,10 @@ fn main() {
                     writer.send(&env);
                 }
                 Action::Log(line) => log(&line),
+                Action::SetAppearance(a) => match theme::set(a == proto::v1::Appearance::Dark) {
+                    Ok(()) => log(&format!("appearance: {}", a.as_str_name())),
+                    Err(e) => log(&format!("appearance not set: {e}")),
+                },
                 Action::Disconnect(why) => {
                     log(&format!("disconnecting: {why}"));
                     (d.close)();
@@ -59,6 +63,38 @@ fn main() {
             }
             Err(_) => std::process::exit(0),
         }
+    }
+}
+
+/// Windows' light/dark setting for the signed-in user (WP4.4).
+#[cfg(windows)]
+mod theme {
+    use std::ptr::null_mut;
+    use transport::win::wide;
+    use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE};
+
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+
+    /// Writes AppsUseLightTheme and SystemUsesLightTheme, then tells every
+    /// window ("ImmersiveColorSet") so Explorer and apps switch at once.
+    pub fn set(dark: bool) -> Result<(), String> {
+        let light: u32 = u32::from(!dark);
+        let key = wide(KEY);
+        for name in ["AppsUseLightTheme", "SystemUsesLightTheme"] {
+            let n = wide(name);
+            let r = unsafe {
+                RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), n.as_ptr(), REG_DWORD, (&light as *const u32).cast(), 4)
+            };
+            if r != 0 {
+                return Err(format!("{name}: registry error {r}"));
+            }
+        }
+        let topic = wide("ImmersiveColorSet");
+        unsafe {
+            SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0, topic.as_ptr() as isize, SMTO_ABORTIFHUNG, 2000, null_mut());
+        }
+        Ok(())
     }
 }
 

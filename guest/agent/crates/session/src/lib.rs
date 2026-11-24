@@ -9,7 +9,7 @@
 
 use proto::handshake::{self, Negotiated};
 use proto::v1::envelope::Body;
-use proto::v1::{error, Envelope, Error as ProtoError, Hello, Role};
+use proto::v1::{error, Ack, Appearance, Envelope, Error as ProtoError, Hello, Role};
 
 /// Capabilities this build of the session agent implements. Empty until
 /// the first family (windows.v1) lands.
@@ -21,6 +21,8 @@ pub enum Action {
     /// The service rejected us or broke protocol: reconnect later.
     Disconnect(String),
     Log(String),
+    /// Switch Windows' light/dark theme for this user (SetHostInfo, WP4.4).
+    SetAppearance(Appearance),
 }
 
 pub struct Core {
@@ -29,11 +31,13 @@ pub struct Core {
     service: Option<Negotiated>,
     /// The host's Hello as forwarded by the service, if a host is connected.
     pub host: Option<Hello>,
+    /// The appearance last applied, so repeats do not rebroadcast.
+    appearance: Option<Appearance>,
 }
 
 impl Core {
     pub fn new(build: impl Into<String>) -> Self {
-        Self { build: build.into(), seq: 0, service: None, host: None }
+        Self { build: build.into(), seq: 0, service: None, host: None, appearance: None }
     }
 
     fn hello(&self) -> Hello {
@@ -84,6 +88,20 @@ impl Core {
                 vec![Action::Log(line)]
             }
             _ if env.reply_to != 0 => Vec::new(),
+            // From the service (stored host info) or the host. Only the
+            // appearance is applied so far: resolution follows the display
+            // path (docs/04), DPI, locale, keyboard and time zone are later.
+            Body::SetHostInfo(info) => {
+                let mut actions = Vec::new();
+                if let Ok(a @ (Appearance::Light | Appearance::Dark)) = Appearance::try_from(info.appearance)
+                    && self.appearance != Some(a)
+                {
+                    self.appearance = Some(a);
+                    actions.push(Action::SetAppearance(a));
+                }
+                actions.push(Action::Send(self.envelope(env.seq, Body::Ack(Ack {}))));
+                actions
+            }
             _ => {
                 let e = ProtoError { code: error::Code::Unsupported as i32, message: "not implemented by the session agent yet".into() };
                 vec![Action::Send(self.envelope(env.seq, Body::Error(e)))]
@@ -116,6 +134,23 @@ mod tests {
         let Action::Send(reply) = &out[0] else { panic!() };
         assert_eq!(reply.reply_to, 3);
         assert!(matches!(&reply.body, Some(Body::Error(e)) if e.code == error::Code::Unsupported as i32));
+    }
+
+    #[test]
+    fn host_info_sets_the_appearance_once() {
+        use proto::v1::SetHostInfo;
+        let mut c = Core::new("s");
+        c.connected();
+        c.handle(Envelope { seq: 1, reply_to: 1, body: Some(Body::Hello(service_hello())) });
+        let info = |a: Appearance| Some(Body::SetHostInfo(SetHostInfo { appearance: a as i32, ..Default::default() }));
+        let out = c.handle(Envelope { seq: 2, reply_to: 0, body: info(Appearance::Dark) });
+        assert_eq!(out[0], Action::SetAppearance(Appearance::Dark));
+        assert!(matches!(&out[1], Action::Send(e) if e.reply_to == 2 && matches!(e.body, Some(Body::Ack(_)))));
+        // Same again: only the Ack. Unspecified: only the Ack. Light: applied.
+        assert_eq!(c.handle(Envelope { seq: 3, reply_to: 0, body: info(Appearance::Dark) }).len(), 1);
+        assert_eq!(c.handle(Envelope { seq: 4, reply_to: 0, body: info(Appearance::Unspecified) }).len(), 1);
+        let out = c.handle(Envelope { seq: 5, reply_to: 0, body: info(Appearance::Light) });
+        assert_eq!(out[0], Action::SetAppearance(Appearance::Light));
     }
 
     #[test]

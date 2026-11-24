@@ -33,13 +33,15 @@ for f in "$ROOT"/scripts/release/*.py; do python3 -I -c 'import ast, sys; ast.pa
 python3 -I "$ROOT/scripts/release/gen_notices.py" --check "$ROOT"
 plutil -lint -s "$ROOT"/app/Entitlements/*.entitlements
 
+# Cargo and rustup run inside guest/agent: rustup picks the toolchain from
+# the current directory's rust-toolchain.toml (pinned 1.99.1, with the
+# Windows target), not from --manifest-path.
 step "cargo check + test (guest/agent, host target)"
-"$CARGO" check --manifest-path "$ROOT/guest/agent/Cargo.toml" --workspace
-"$CARGO" test --manifest-path "$ROOT/guest/agent/Cargo.toml" --workspace
+(cd "$ROOT/guest/agent" && "$CARGO" check --workspace && "$CARGO" test --workspace)
 
-if rustup target list --installed 2>/dev/null | grep -qx aarch64-pc-windows-msvc; then
+if (cd "$ROOT/guest/agent" && rustup target list --installed 2>/dev/null) | grep -qx aarch64-pc-windows-msvc; then
   step "cargo check (guest/agent, aarch64-pc-windows-msvc)"
-  "$CARGO" check --manifest-path "$ROOT/guest/agent/Cargo.toml" --workspace --target aarch64-pc-windows-msvc
+  (cd "$ROOT/guest/agent" && "$CARGO" check --workspace --target aarch64-pc-windows-msvc)
 else
   step "cargo check (Windows target) skipped: rustup target add aarch64-pc-windows-msvc"
 fi

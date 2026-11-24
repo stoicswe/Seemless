@@ -4,6 +4,28 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
 
 ## Done
 
+- **Network switch and offline first setup** (2026-11-24, owner request):
+  - Machine ▸ Disconnect from / Connect to Network (⌥⌘I), and `seemlessctl
+    vm network status|connect|disconnect|finish-setup`. Both use QMP
+    `set_link` on `n0`.
+  - Image-built VMs start offline (`VMConfig.offlineUntilSetupDone`) until
+    `VMManager.finishOfflineSetup`. Its automatic trigger (the agent
+    reporting a signed-in desktop) is handed to WP4.4.
+  - Verified on a Windows 11 VM: the tray icon changed to "not connected"
+    and back.
+  - docs/02 "Network link".
+- **Quarantine** (2026-11-24, owner request): a VM chosen as quarantined at
+  creation has no connection to the Mac except keyboard, mouse and display.
+  - Switches per connection: network, agent, the clipboard in each
+    direction, files and sound. "Off" means no device, applied at the next
+    start.
+  - It can be lifted while stopped, after a warning.
+  - Where to find it: New VM sheet, Settings ▸ Quarantine, header badge,
+    `vm create|image build --quarantine` and `vm quarantine`.
+  - Verified: a quarantined VM booted with no NIC, agent or audio device.
+  - 203 Swift tests pass. The settings switches were not clicked through by
+    a person.
+  - docs/07 "Quarantine".
 - Phase 1 planning documents (`docs/00`–`11`), `CLAUDE.md`.
 - **WP0.1 repo scaffolding** (2026-11-23):
   - Directory layout from `docs/01` with README stubs.
@@ -430,8 +452,16 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
       `input-send-event`, and usb-audio on the CoreAudio audiodev.
     - Not checked: audio output or the tablet inside Windows on the rebuilt
       QEMU. Nobody clicked Start in the release app.
-  - **Not done:** Developer ID signing and notarization (they need the
-    owner's identity). Open licence items: docs/10 L4–L6.
+  - **Signing (owner, 2026-11-24): self-signed, not notarized** for
+    Preview 1. The owner runs `scripts/release/make-signing-cert.sh` once.
+    `sign-app.sh` detects a self-signed identity (no Team ID) and keeps
+    `disable-library-validation`; this was checked: without it QEMU refuses
+    its own dylibs. Notarization is skipped. Testers allow the app once in
+    System Settings ▸ Privacy & Security (README, `docs/release.md`).
+    Tested with a throwaway keychain identity: the relocated self-signed
+    app booted the firmware VM, and `spctl` rejected it as expected.
+  - **Not done:** the owner's identity is not created yet, so the current
+    `build/release` is ad-hoc. Open licence items: docs/10 L4–L6.
 
 ## Not done
 
@@ -468,9 +498,11 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
   not run, so virglrenderer/Neptune still have never run. Blocked by the
   account bug, then by the usage limit. Resume steps: `docs/spikes/S2-windows-graphics.md`.
 - Idle RAM and disk use, stock vs `seemless-default`, not measured (G4/WP2.5).
-- The agent protocol has only run against the mock: no Rust agent exists
-  yet, and nothing has crossed virtio-serial (WP4.2). The bulk channel and
-  `WindowModel` are not started.
+- The agent protocol has crossed virtio-serial (WP4.2, VM `wp42`): Hello
+  and GuestInfo from the real service; a session-family request reached
+  the session agent in the logged-on user's session through the pipe and
+  came back (`UNSUPPORTED`, from the session agent: it claims no
+  capabilities yet). The bulk channel and `WindowModel` are not started.
 - Suspend/resume-from-disk (S6), sealing a golden image, guest agent (M4)
   not started. App: VM manager, Zen preview and a first desktop window
   (WP3.2 ◐: no resize → guest resolution yet). The helper, onboarding flow
@@ -482,7 +514,6 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
 - virglrenderer, Venus and Neptune have not run: QEMU starts the renderer
   only when a guest driver talks to it (S2).
 - CI workflow written but never run on GitHub.
-- Windows-target build of the agent not checked (target not installed).
 - Spikes S2–S8 not run. Every "Provisional" decision in
   `01-architecture.md` is unproven.
 - Nothing in the plan has been tested on hardware.
@@ -493,10 +524,35 @@ Owner's order (2026-11-24): WP4.2, WP5.1 and WP7.5 run now, in parallel
 sessions, alongside S9's experiments. The Zen steps after the agent follow.
 Open questions come last.
 
-1. WP4.2: the Rust service and session agent over vioserial; acceptance
-   `seemlessctl agent info` against a real VM. It needs the Windows target
-   and cargo-xwin, whose first build asks the owner to accept Microsoft's
-   CRT/SDK licence.
+1. WP4.2 ✅ (2026-11-24): service `SeemlessAgent` + session agent skeleton
+   (`guest/agent/crates/{svc,session,transport}`, docs/06 "Agent
+   implementation"). Build: `guest/tools/build-agent.sh` (static CRT);
+   install: `image build --agent build/guest-tools/agent`. Acceptance
+   passed on a fresh VM under `build/wp42/root`:
+   `seemlessctl agent info --root build/wp42/root --name wp42` →
+   `Windows 11 Pro 26H2 (10.0.26300.9457)`, agent
+   `seemless-agent-svc 0.0.1 (8bc3fb59e430)`, vioserial + netkvm driver
+   versions; `gpu` empty (no display driver in that VM). Session agent
+   checked with a scratch host probe (Hello, then `HitTest` → the session
+   agent's own `UNSUPPORTED` reply): supervisor, pipe DACL + pid check and
+   forwarding work in Windows. Log at %ProgramData% not read from the host.
+   WP4.3 ✅ (2026-11-24): guest tools. `guest/tools/build.sh` →
+   `build/guest-tools/` (agent/ + `seemless-tools.iso`, label
+   SEEMLESS_TOOLS); every `image build` installs the agent unless
+   `--no-agent`; `seemlessctl tools info|update` updates a running VM in
+   place (USB CD hot-plug + `UpdateTools` + rename-and-copy `install.cmd`;
+   docs/06 "Guest tools ISO"). Acceptance on VM `wp42` (built without
+   `--agent`, agent 0.0.1; workspace bumped to 0.0.2):
+   `tools update` → `updated: 0.0.1 (8bc3fb59e430+dirty) -> 0.0.2
+   (8bc3fb59e430+dirty)` in ~6 s; after a sign-out (Win+X, U, I) the 0.0.2
+   service still answered and the session agent had ended; after a restart
+   + auto-logon the session agent answered again. Re-signing-in without a
+   restart not tested (needs the account password). Bug found: a
+   hot-plugged `usb-bot` stays detached until `attached` is set. Not yet:
+   the app bundling `Resources/guest-tools` (P1's packaging), an update
+   button in the app, drivers/redist on the ISO (Q1, Q7, Q13).
+   Next: WP4.4 (host info, time sync, shutdown, session state, offline
+   first-setup trigger).
 2. WP5.1 (guest `windows-model`) and the host `WindowModel`: both can be
    driven by the mock agent now.
 3. WP7.5, D3D12 (◐ 2026-11-24; note `docs/spikes/WP7.5-d3d12-host-backend.md`):
@@ -592,3 +648,6 @@ Open questions come last.
 | 2026-11-24 | WP7.5 (◐) | vkd3d-proton + MoltenVK built from source with H1–H4 patches; `NPT_D3D12_LIBRARY_PATH` wired; ladder rungs 1–3 pass on host and in a guest with DXBC (rung 3 = host reference); guest DXIL blocked by Triton's SM 5.1 caps |
 | 2026-11-24 | P2 (WP3.4, WP3.2, WP3.5 part) | First-run flow builds and starts Windows with the 3D driver (licence accepted by the owner in the window); Notepad typing, resize → guest resolution, full screen, Ctrl-Alt-Delete verified by screenshots; audio device present in Windows and heard by the owner |
 | 2026-11-24 | P1 (◐) | Release packaging: self-contained app, otool audit, hardened-runtime signing (ad-hoc here), notices, source offer. Then (owner: build from source) QEMU/swtpm libraries from pinned source for macOS 26, QEMU without gnutls/SDL/libusb/zstd; audit clean, relocated app boots firmware; Developer ID run left to the owner |
+| 2026-11-24 | WP4.2 | Rust service + session agent over vioserial; `agent info` returns real GuestInfo from Windows (VM wp42); session agent reached through the pipe. First build failed to start in Windows (VCRUNTIME140.dll missing): CRT now static |
+| 2026-11-24 | WP4.3 | Guest tools ISO + `seemlessctl tools update`: agent 0.0.1 → 0.0.2 in place on VM wp42, service survives sign-out; every image build installs the agent by default; fixed usb-bot hot-plug (needs `attached`) |
+| 2026-11-24 | Network + quarantine | Machine-menu network switch (QMP `set_link`), offline first setup for image-built VMs, and quarantine (per-connection switches; off = no device). Verified on Windows 11 and a quarantined firmware boot; 203 Swift tests |
