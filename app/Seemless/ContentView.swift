@@ -1,4 +1,5 @@
 import SeemlessKit
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
@@ -193,17 +194,39 @@ struct StackMissingView: View {
     }
 }
 
-/// Soft colour wash behind the content so the glass has something to refract.
+/// Frosted glass behind the content (owner, 2026-11-24): the window is see-through
+/// and blurs the desktop wallpaper behind it, with a soft colour wash on top so
+/// the glass sections have something to refract.
 struct WindowBackdrop: View {
     var tint: Color
 
     var body: some View {
         ZStack {
-            Rectangle().fill(.background)
-            RadialGradient(colors: [tint.opacity(0.18), .clear], center: .topLeading, startRadius: 40, endRadius: 700)
-            RadialGradient(colors: [Color.purple.opacity(0.10), .clear], center: .bottomTrailing, startRadius: 40, endRadius: 650)
+            FrostedWindowBackground()
+            RadialGradient(colors: [tint.opacity(0.14), .clear], center: .topLeading, startRadius: 40, endRadius: 700)
+            RadialGradient(colors: [Color.purple.opacity(0.08), .clear], center: .bottomTrailing, startRadius: 40, endRadius: 650)
         }
         .ignoresSafeArea()
         .animation(.smooth(duration: 0.6), value: tint)
+    }
+}
+
+/// A behind-window blur: what is under the window (the wallpaper, other
+/// windows) shows through, frosted. It stays frosted when the window is not
+/// key (macOS would otherwise turn it flat grey), and follows the "Reduce
+/// transparency" accessibility setting on its own.
+struct FrostedWindowBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .underWindowBackground
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        view.state = .active
+        view.material = material
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {
+        view.material = material
     }
 }

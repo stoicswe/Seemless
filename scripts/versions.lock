@@ -60,7 +60,8 @@ mvk-cereal        https://github.com/USCiLab/cereal.git               mvk-1.4.2 
 # --- Libraries QEMU and swtpm link (P1, owner 2026-11-24: "build from source") ---
 # Built by build-deps.sh for macOS 26.0 instead of taking Homebrew's bottles,
 # which this macOS 27 Mac builds with minos 27.0 (docs/10 L1). Versions match
-# what Homebrew had on 2026-11-24.
+# what Homebrew had on 2026-11-24. QEMU is configured without gnutls, SDL,
+# libusb and zstd (owner, 2026-11-24, option A), so those are not built.
 pcre2             https://github.com/PCRE2Project/pcre2.git               pcre2-10.49     6f9d7c1373262c541324a16a358785b33ef116cf
 glib              https://gitlab.gnome.org/GNOME/glib.git                 2.90.1          e05063ccc6c8f222465a1080927f4c14349f3de6
 # glib's meson subprojects, as its subprojects/*.wrap name them (gvdb: wrap
@@ -70,6 +71,7 @@ gvdb              https://gitlab.gnome.org/GNOME/gvdb.git                 glib-w
 proxy-libintl     https://github.com/frida/proxy-libintl.git              0.5             33934de09af6a6627eb44e310a8079df009abdbb
 json-glib         https://gitlab.gnome.org/GNOME/json-glib.git            1.10.8          8273a7d2539c115c0eb1bcc9e8cd9d26fcde204a
 openssl           https://github.com/openssl/openssl.git                  openssl-3.5.9   45e844fa2a14ec92d146bd8f5778ac130b6625fb
+pixman            https://gitlab.freedesktop.org/pixman/pixman.git        pixman-0.46.4   9cc163c9da0fb4da430641715313d95a6ec466d9
 libslirp          https://gitlab.freedesktop.org/slirp/libslirp.git       v4.9.7          ce12dcddf710a71dc0de6450ec95edbadf8e9f66
 libpng            https://github.com/pnggroup/libpng.git                  v1.6.59         cd952f49f95bb27154ae77dbb103032d95f6e580
 libjpeg-turbo     https://github.com/libjpeg-turbo/libjpeg-turbo.git      3.2.1           7b4993786d856cbccabfc0ed2f923ba000e326cc

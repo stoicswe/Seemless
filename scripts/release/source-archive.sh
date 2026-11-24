@@ -2,7 +2,7 @@
 # Builds the source offer for a release (WP8.5): the exact source of every
 # third-party component in Seemless.app, for publishing next to the release.
 #
-#   scripts/release/source-archive.sh [--app build/release/Seemless.app] [--out DIR] [--allow-stale]
+#   scripts/release/source-archive.sh [--out DIR]
 #
 # Output (default build/release/Seemless-<version>-sources/):
 #   <name>-<sha12>.tar.gz           `git archive` of the SHA pinned in
@@ -12,8 +12,6 @@
 #                                   commit its superproject records
 #   qemu-subprojects-<sha12>.tar.gz the meson subprojects QEMU's configure
 #                                   downloaded (dtc, keycodemapdb, softfloat)
-#   homebrew/<tarball>              upstream source of each Homebrew library in
-#                                   the app (homebrew-libraries.tsv), sha256-checked
 #   seemless-build-<version>.tar.gz patches/, scripts/build-deps.sh,
 #                                   scripts/versions.lock, scripts/release/,
 #                                   THIRD_PARTY.md: how the binaries were built
@@ -21,30 +19,22 @@
 #
 # Archives are made from the pinned commits, never from the patched working
 # trees; the patches ship separately in seemless-build-*.tar.gz.
-# --allow-stale skips Homebrew rows marked STALE (installed bottle older than
-# the formula) instead of failing. A source offer with skipped rows is
-# incomplete: do not publish it.
-# Needs network for the Homebrew tarballs. Uploading is the owner's job.
+# Every library in the app is built from these pins (no Homebrew), so the
+# offer is complete without network access. Uploading is the owner's job.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 src="$repo/build/src"
 lock="$repo/scripts/versions.lock"
 version="$(sed -n 's/.*static let version = "\(.*\)".*/\1/p' "$repo/kit/Sources/SeemlessKit/Seemless.swift")"
-app="$repo/build/release/Seemless.app"
 out=""
-allow_stale=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --app) app="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
-    --allow-stale) allow_stale=1; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
 out="${out:-$repo/build/release/Seemless-$version-sources}"
-tsv="$app/Contents/Resources/Licenses/homebrew-libraries.tsv"
-[[ -f "$tsv" ]] || { echo "source-archive: $tsv missing (run scripts/package-release.sh first)" >&2; exit 1; }
 
 # Components in the app (THIRD_PARTY.md "Shipped in Seemless.app"), by
 # versions.lock name, with optional path restriction and submodules to take.
@@ -66,9 +56,19 @@ components=(
   "mvk-cereal||"
   "libtpms||"
   "swtpm||"
+  "glib||"
+  "gvdb||"
+  "proxy-libintl||"
+  "pcre2||"
+  "json-glib||"
+  "openssl||"
+  "libslirp||"
+  "pixman||"
+  "libpng||"
+  "libjpeg-turbo||"
 )
 
-rm -rf "$out"; mkdir -p "$out/homebrew"
+rm -rf "$out"; mkdir -p "$out"
 sums="$out/SOURCES.txt"
 {
   echo "# Seemless $version: corresponding source for the third-party components in Seemless.app."
@@ -132,35 +132,10 @@ qsub="$out/qemu-subprojects-${qsha:0:12}.tar.gz"
 record "$qsub" "meson subprojects downloaded by QEMU $qsha configure (revisions in subprojects/*.wrap)"
 echo "source-archive: qemu meson subprojects"
 
-# Homebrew libraries.
-skipped=0
-while IFS=$'\t' read -r formula hver licence url sha256 homepage files; do
-  [[ "$formula" == \#* || -z "$formula" ]] && continue
-  if [[ "$url" == STALE || -z "$url" ]]; then
-    if [[ $allow_stale == 1 ]]; then
-      echo "source-archive: WARNING: $formula $hver skipped (STALE: installed bottle older than the formula)" >&2
-      echo "MISSING  -  $formula $hver ($licence): bottle older than the formula; run brew upgrade and package again" >> "$sums"
-      skipped=$((skipped + 1)); continue
-    fi
-    echo "source-archive: $formula $hver: no exact source (STALE). Run 'brew upgrade $formula' and scripts/package-release.sh again." >&2
-    exit 1
-  fi
-  hfile="$out/homebrew/$(basename "${url%%\?*}")"
-  curl -fsSL --retry 3 -o "$hfile" "$url"
-  got="$(shasum -a 256 "$hfile" | cut -d' ' -f1)"
-  [[ "$got" == "$sha256" ]] || { echo "source-archive: $formula: sha256 $got, Homebrew says $sha256" >&2; exit 1; }
-  record "$hfile" "$url ($formula $hver, $licence)"
-  echo "source-archive: homebrew $formula $hver"
-done < "$tsv"
-
 # How it was built: our patches and build scripts.
 bfile="$out/seemless-build-$version.tar.gz"
 ( cd "$repo" && tar -czf "$bfile" patches scripts/build-deps.sh scripts/versions.lock scripts/release THIRD_PARTY.md )
 record "$bfile" "Seemless patches/ and build scripts (apply patches/<name>/*.patch to each component; see scripts/build-deps.sh)"
 
 du -sh "$out"
-if [[ $skipped -gt 0 ]]; then
-  echo "source-archive: INCOMPLETE: $skipped Homebrew sources missing (see SOURCES.txt). Do not publish." >&2
-  exit 3
-fi
 echo "source-archive: $out"

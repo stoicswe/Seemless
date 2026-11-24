@@ -76,8 +76,10 @@ and shows each Windows window as a native Mac window. The plan lives in
   `scripts/package-release.sh` → `build/release/` (self-contained
   `Seemless.app`, dmg, zip; audit, ad-hoc signing without
   `SEEMLESS_SIGN_IDENTITY`, notarization with `SEEMLESS_NOTARY_PROFILE`).
-  `--allow-newer-minos` for local tests while Homebrew's libraries need
-  macOS 27. `scripts/release/source-archive.sh` writes the source offer.
+  `scripts/release/source-archive.sh` writes the source offer. Every
+  library in the app is built from pinned source (`build-deps.sh` builds
+  GLib, OpenSSL & co. hermetically, without Homebrew's bottles); the
+  bundler refuses Homebrew libraries.
   The app and `seemlessctl` inside a bundle use the bundled stack
   (`HostStack.locate()`); test relocated bundles under `sandbox-exec`
   denying `build/prefix` and `/opt/homebrew` rather than renaming the

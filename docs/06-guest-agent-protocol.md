@@ -32,8 +32,11 @@ crates/
   protogen/     # host dev tool: runs protoc-gen-swift via protox (scripts/gen-proto.sh)
 ```
 
-Build from macOS: `cargo xwin build --target aarch64-pc-windows-msvc
---release`. Unit tests for pure-logic crates run on the Mac host
+Build from macOS with `guest/tools/build-agent.sh`, or by hand from inside
+`guest/agent` (rustup picks the pinned toolchain, which has the Windows
+target, from the current directory, not from `--manifest-path`):
+`cd guest/agent && ~/.cargo/bin/cargo xwin build --target
+aarch64-pc-windows-msvc --release`. Unit tests for pure-logic crates run on the Mac host
 (`cargo test -p windows-model`); Windows-API crates are tested in the VM via
 `seemlessctl guest test` (copies a test binary through the bulk channel and
 runs it).

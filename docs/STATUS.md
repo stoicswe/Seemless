@@ -394,34 +394,44 @@ Updated: 2026-11-24 (Show Display opens the app's desktop window for exported di
 - Upstream research: UTM 5.0's Neptune/Triton DirectX stack and Tiny11
   Builder 0.2.0 state (see `11-references.md`).
 
-- **P1 self-contained, signed app** (2026-11-24, WP8.1/8.2/8.5, partial):
-  - `scripts/package-release.sh` builds `build/release/Seemless.app` (QEMU,
-    qemu-img, swtpm, render server and `seemlessctl` in `Helpers/`, 34
-    dylibs in `Frameworks/` with `@rpath` names, firmware in
-    `Resources/qemu`, image assets, licences), a dmg and a zip. An `otool`
-    audit (`scripts/release/audit-bundle.sh`) fails the build on any path
-    outside the bundle. Signing is inside-out with the hardened runtime;
-    QEMU gets only `com.apple.security.hypervisor` (no JIT needed).
-    Notarization runs when the owner sets `SEEMLESS_SIGN_IDENTITY` and
-    `SEEMLESS_NOTARY_PROFILE`. Runbook and the owner's one-time setup:
-    `docs/release.md`.
+- **P1 self-contained, signed app** (2026-11-24, WP8.1/8.2/8.5; only the
+  owner's Developer ID run is left):
+  - `scripts/package-release.sh` builds `build/release/Seemless.app`
+    (187 MB), a dmg and a zip. QEMU, qemu-img, swtpm, the render server and
+    `seemlessctl` are in `Helpers/`, 22 dylibs in `Frameworks/` with
+    `@rpath` names, firmware in `Resources/qemu`, plus image assets and
+    licences. An `otool` audit (`scripts/release/audit-bundle.sh`) fails
+    the build on any path outside the bundle or a minimum macOS above 26.0.
+    Signing is inside-out with the hardened runtime; QEMU gets only
+    `com.apple.security.hypervisor` (no JIT needed). Notarization runs when
+    the owner sets `SEEMLESS_SIGN_IDENTITY` and `SEEMLESS_NOTARY_PROFILE`.
+    Runbook and the owner's one-time setup: `docs/release.md`.
+  - **No Homebrew in the app** (owner: "build from source", option A).
+    `build-deps.sh` builds PCRE2, GLib (with gvdb and proxy-libintl),
+    JSON-GLib, OpenSSL 3.5.9, libslirp, pixman, libpng and libjpeg-turbo
+    from pinned source for macOS 26.0. These, libtpms, swtpm and QEMU build
+    "hermetically" (pkg-config sees only `build/prefix` and the SDK). QEMU
+    is configured without gnutls, SDL, libusb and zstd. swtpm is built
+    without gnutls via `patches/swtpm/0001`, which skips its certificate
+    tools.
   - `HostStack` has an app-bundle layout. `locate()` prefers the
     enclosing bundle over `build/prefix`. `ImageAssets` does the same.
-  - Licences: notices generated from `THIRD_PARTY.md` (new "Shipped in
-    Seemless.app" table) and Homebrew's metadata; `source-archive.sh`
-    builds the source offer from the pinned SHAs, submodules, Homebrew
-    tarballs and `patches/`.
-  - **Verified:** the bundle copied out of the repository ran under
-    `sandbox-exec` with `build/prefix` and `/opt/homebrew` unreadable.
-    Its own `seemlessctl` booted two firmware VMs to the UEFI shell
-    (screendumps checked). ANGLE, virglrenderer and SDL3 loaded from
-    `Contents/Frameworks`, and nothing was mapped from the prefix or
-    Homebrew. The app found the bundled stack (window screenshot). Nobody
-    clicked Start in the release app.
-  - **Not done:** releasable on macOS 26: 14 Homebrew dylibs need macOS 27
-    (docs/10 L1; the audit fails without `--allow-newer-minos`). Developer
-    ID signing and notarization have not run (they need the owner's
-    identity). Licence findings L1–L6 in docs/10 need the owner.
+  - Licences: MIT for our code (Q10) plus notices generated from
+    `THIRD_PARTY.md`'s "Shipped in Seemless.app" table (32 components).
+    `source-archive.sh` builds the source offer from the pinned SHAs,
+    submodules and `patches/`, with no network.
+  - **Verified:**
+    - The audit passes with no exceptions: 28 Mach-O files, 0 problems.
+    - The bundle was copied out of the repository and run under
+      `sandbox-exec` with `build/prefix` and `/opt/homebrew` unreadable.
+      Its `seemlessctl` booted a firmware VM to the UEFI shell (screendump
+      checked). Every library loaded from `Contents/Frameworks`.
+    - QMP showed the USB tablet as the active absolute pointer, accepting
+      `input-send-event`, and usb-audio on the CoreAudio audiodev.
+    - Not checked: audio output or the tablet inside Windows on the rebuilt
+      QEMU. Nobody clicked Start in the release app.
+  - **Not done:** Developer ID signing and notarization (they need the
+    owner's identity). Open licence items: docs/10 L4–L6.
 
 ## Not done
 
@@ -515,7 +525,10 @@ Open questions come last.
    with desktop mode and an experimental Zen mode. Its scope, order and
    owner gates are in `docs/09-roadmap.md` ("Preview 1"). From now on,
    that list decides what runs next.
-7. **Last, but before Preview 1 ships:** the open questions in
+7. **CI channels (Preview 1 P8)**, once Preview 1 is ready for testing:
+   PR, nightly, beta and release builds like Endfield FineWine's, with no
+   announcements outside GitHub. Spec in `docs/ci-plan.md`.
+8. **Last, but before Preview 1 ships:** the open questions in
    `10-risks-licensing.md` (owner, 2026-11-24). Q10 is answered: MIT for
    our own code, upstream projects keep their own licences, and no ISO
    distribution. Still blocking a public release: Q11 (name), Q12 (agent
@@ -578,4 +591,4 @@ Open questions come last.
 | 2026-11-24 | WP5.1 | `windows-model`: classification, rules.toml, tracker emitting protocol messages; 10 synthetic app dumps classify as expected (33 tests); Win32 enumerator not built |
 | 2026-11-24 | WP7.5 (◐) | vkd3d-proton + MoltenVK built from source with H1–H4 patches; `NPT_D3D12_LIBRARY_PATH` wired; ladder rungs 1–3 pass on host and in a guest with DXBC (rung 3 = host reference); guest DXIL blocked by Triton's SM 5.1 caps |
 | 2026-11-24 | P2 (WP3.4, WP3.2, WP3.5 part) | First-run flow builds and starts Windows with the 3D driver (licence accepted by the owner in the window); Notepad typing, resize → guest resolution, full screen, Ctrl-Alt-Delete verified by screenshots; audio device present in Windows and heard by the owner |
-| 2026-11-24 | P1 (◐) | Release packaging: self-contained app, otool audit, hardened-runtime signing (ad-hoc here), notices, source offer; relocated app boots firmware with no build/prefix or Homebrew; blocked for macOS 26 by Homebrew libraries built for 27 (docs/10 L1) |
+| 2026-11-24 | P1 (◐) | Release packaging: self-contained app, otool audit, hardened-runtime signing (ad-hoc here), notices, source offer. Then (owner: build from source) QEMU/swtpm libraries from pinned source for macOS 26, QEMU without gnutls/SDL/libusb/zstd; audit clean, relocated app boots firmware; Developer ID run left to the owner |

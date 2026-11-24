@@ -30,12 +30,13 @@ Preview 1 ships.
 
 | # | Item | Work packages | State / gate |
 |---|------|---------------|--------------|
-| P1 ◐ | **Self-contained, signed app**: QEMU, the graphics stack, swtpm and firmware inside `Seemless.app` (no `build/prefix`), Developer ID signing, hardened runtime with the hypervisor entitlement, notarization, a release zip/dmg, and GPL source offers plus third-party notices in the app | WP8.1, WP8.2, WP8.5 | Scripts done (2026-11-24, `docs/release.md`): the relocated app boots firmware with no `build/prefix` or Homebrew. Open: Homebrew libraries need macOS 27 (docs/10 L1, owner), and Developer ID signing + notarization have not run (needs the owner's identity) |
+| P1 ◐ | **Self-contained, signed app**: QEMU, the graphics stack, swtpm and firmware inside `Seemless.app` (no `build/prefix`), Developer ID signing, hardened runtime with the hypervisor entitlement, notarization, a release zip/dmg, and GPL source offers plus third-party notices in the app | WP8.1, WP8.2, WP8.5 | Scripts done (2026-11-24, `docs/release.md`): the relocated app boots firmware with no `build/prefix` or Homebrew; every library is built from pinned source for macOS 26 (audit clean). Open: Developer ID signing + notarization have not run (needs the owner's identity) |
 | P2 | **First run without Terminal**: pick an ISO, build the VM, the user accepts the Windows licence in the VM window, progress and errors in the app; desktop mode complete (typing, resize changes the guest resolution, HiDPI); audio out | WP3.4, WP3.2, WP3.5 (audio, scaling) | Fast Startup is already off in the image (S6b) |
 | P3 | **Agent in every VM**: WP4.2, then tools install and update (WP4.3), then host info, time sync and graceful shutdown (WP4.4) | WP4.2–4.4 | WP4.2 waits for the owner's CRT/SDK build (`guest/tools/build-agent.sh`) |
 | P4 | **Zen, experimental, on the real agent**: real windows (Z2: WP5.2 with WP5.1's model), input and focus with native cursor shapes (Z3: WP5.3), the clipboard both ways (WP4.5). Tier 2 (crop) only, labelled experimental | WP5.2, WP5.3, WP4.5 | After P3's WP4.2 |
 | P5 | **Supportable**: a diagnostics export for bug reports (logs, configs, no disk contents or personal data), crash reporting, an updater | WP8.6, WP8.3 | After P1 |
 | P6 | **User docs**: README for testers (requirements: Apple silicon, macOS 26+, own ISO; install; known issues), GitHub release notes | WP8.7 (minimal) | Last before release |
+| P8 | **CI channels** (owner, 2026-11-24): PR builds, nightly, beta and release builds like Endfield FineWine's, with nothing announced outside GitHub. Spec: `docs/ci-plan.md` | WP8.2/8.3 tie-ins | Once Preview 1 is ready for testing; needs the owner's signing and Sparkle secrets |
 | P7 | **Owner decisions before shipping**: ~~Q10 licence~~ (answered: MIT for our code, upstream keep theirs, no ISO distribution), Q11 name, Q12 agent CRT redistribution, Q13 guest drivers (with Q1, Q7), Q8 edition guidance; Apple Developer account | — | Owner; asked last |
 
 Not in Preview 1: suspend (guest hibernate with viogpu3d is broken, S6b),
@@ -171,12 +172,11 @@ usable D3D12 driver, replace this milestone with "integrate upstream's".
 ## M8 — Release engineering
 
 WP8.1 ◐ bundle assembly (prefix → `Contents/Frameworks`, `Helpers`), rpath
-fix-ups, universal/arch checks (done 2026-11-24 except macOS 26 libraries,
-docs/10 L1) · WP8.2 ◐ Developer ID signing, hardened runtime, notarization
+fix-ups, universal/arch checks (done 2026-11-24) · WP8.2 ◐ Developer ID signing, hardened runtime, notarization
 (scripts done; first Developer ID run is the owner's) · WP8.3 updater (Sparkle) and guest tools versioning ·
 WP8.4 driver signing for release (D12) and Secure Boot decision ·
 WP8.5 ◐ licence compliance bundle (source offers for GPL parts, third-party
-notices; scripts done, owner review of docs/10 L1–L6) · WP8.6 crash reporting and diagnostics export · WP8.7 documentation
+notices; scripts done, owner review of docs/10 L4–L6) · WP8.6 crash reporting and diagnostics export · WP8.7 documentation
 site and compatibility guidance.
 
 ## Dependency sketch

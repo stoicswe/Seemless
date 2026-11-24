@@ -24,9 +24,24 @@ read it before starting, link in [11-references.md](11-references.md)):
 6. swtpm + libtpms
 7. QEMU (`utmapp/qemu`, `utm-edition`) + `patches/qemu/*.patch`
 
-Other QEMU dependencies: glib, pixman, libslirp, libusb, zstd. Prefer building
-them into the prefix over Homebrew so the app bundle is self-contained;
-Homebrew is acceptable for M0 only.
+Libraries QEMU and swtpm link (P1, owner 2026-11-24: build from source)
+come first, also from pinned sources: PCRE2, GLib (with its gvdb and
+proxy-libintl subprojects; libffi and zlib from the macOS SDK), JSON-GLib,
+OpenSSL 3.5, libslirp, pixman, libpng and libjpeg-turbo. These, libtpms,
+swtpm and QEMU build "hermetically": pkg-config sees only `build/prefix` and
+the SDK's own `.pc` files, never Homebrew's bottles (which on a newer macOS
+need that newer macOS, docs/10 L1). Homebrew supplies only build tools.
+
+QEMU features left out, so their libraries are not in the app (owner,
+2026-11-24, option A): `--disable-gnutls` (TLS for VNC, migration and
+chardevs; LUKS disk encryption; also nettle/gcrypt off), `--disable-sdl`
+(`-display sdl`), `--disable-libusb` (USB host passthrough), and
+`--disable-zstd` (zstd qcow2 clusters and migration compression). Seemless
+uses none of them: the display is cocoa or `seemless`, qcow2 uses zlib, and
+the emulated USB devices (xhci, keyboard, tablet, storage, audio) need no
+host library. swtpm is built `--without-gnutls` with
+`patches/swtpm/0001` (its certificate tools `swtpm_cert`/`swtpm_localca`
+are skipped; Seemless runs only `swtpm socket`).
 
 Implemented by `scripts/build-deps.sh` (S1, 2026-11-23): it builds this order
 with the deviations listed in `docs/spikes/S1-host-stack-build.md`, and

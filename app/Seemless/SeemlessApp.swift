@@ -12,6 +12,8 @@ struct SeemlessApp: App {
             ContentView()
                 .environment(model)
                 .frame(minWidth: 820, minHeight: 560)
+                // No opaque window fill: each view's WindowBackdrop frosts the wallpaper.
+                .containerBackground(.clear, for: .window)
                 .onAppear {
                     delegate.model = model
                     model.startPolling()

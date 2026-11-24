@@ -4,7 +4,7 @@
 # Usage:
 #   scripts/build-deps.sh fetch                 # fetch every source in versions.lock
 #   scripts/build-deps.sh [component ...]       # build components in order
-#   scripts/build-deps.sh all                   # angle epoxy dxmt virgl libtpms swtpm qemu moltenvk vkd3d
+#   scripts/build-deps.sh all                   # libraries, then angle epoxy dxmt virgl libtpms swtpm qemu moltenvk vkd3d
 #   scripts/build-deps.sh --force <component>   # rebuild even if stamped done
 #
 # Layout (all gitignored):
@@ -39,6 +39,18 @@ JOBS="$(sysctl -n hw.ncpu)"
 export MACOSX_DEPLOYMENT_TARGET=26.0
 
 export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig:$BREW/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+# Libraries that ship inside Seemless.app (glib, OpenSSL, ...) and everything
+# linking them (libtpms, swtpm, QEMU) build "hermetically": pkg-config sees
+# only build/prefix and the macOS SDK's own .pc files (zlib, libffi), never
+# Homebrew's bottles, which on a newer macOS need that newer macOS (docs/10
+# L1). CMake likewise ignores the Homebrew prefix. Homebrew still provides
+# the build tools (meson, ninja, cmake, autotools, pkg-config).
+SDK_PC="$(pkg-config --variable pc_path pkg-config | tr ':' '\n' | grep '/Library/Homebrew/os/mac/pkgconfig/' | head -1)"
+hermetic() { env PKG_CONFIG_PATH= PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig${SDK_PC:+:$SDK_PC}" "$@"; }
+CMAKE_HERMETIC=(-DCMAKE_BUILD_TYPE=Release "-DCMAKE_INSTALL_PREFIX=$PREFIX" -DCMAKE_INSTALL_LIBDIR=lib
+  "-DCMAKE_INSTALL_NAME_DIR=$PREFIX/lib" -DCMAKE_OSX_ARCHITECTURES=arm64
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 "-DCMAKE_IGNORE_PREFIX_PATH=$BREW" -DBUILD_SHARED_LIBS=ON)
 
 # Python build-time modules (virglrenderer's gallium codegen needs PyYAML).
 # A private venv keeps the system/Homebrew Python untouched.
@@ -117,6 +129,106 @@ apply_patches() {
   done
 }
 
+# ------------------------------------------------------------------ libraries
+# P1 (owner 2026-11-24): the libraries QEMU and swtpm link, from pinned
+# source for macOS 26.0, so the release app runs on macOS 26 (docs/10 L1).
+
+build_pcre2() {
+  done_already pcre2 && return
+  fetch pcre2
+  local s="$SRC/pcre2"
+  # No JIT: glib falls back to the interpreter, and the hardened runtime
+  # would need com.apple.security.cs.allow-jit for MAP_JIT.
+  run pcre2-cmake hermetic cmake -S "$s" -B "$s/build" -G Ninja "${CMAKE_HERMETIC[@]}" \
+    -DPCRE2_BUILD_PCRE2_8=ON -DPCRE2_BUILD_PCRE2_16=OFF -DPCRE2_BUILD_PCRE2_32=OFF \
+    -DPCRE2_SUPPORT_JIT=OFF -DPCRE2_BUILD_PCRE2GREP=OFF -DPCRE2_BUILD_TESTS=OFF -DPCRE2_SUPPORT_LIBBZ2=OFF \
+    -DPCRE2_SUPPORT_LIBZ=OFF -DPCRE2_SUPPORT_LIBEDIT=OFF -DPCRE2_SUPPORT_LIBREADLINE=OFF
+  run pcre2-install cmake --build "$s/build" --target install
+  stamp pcre2 pcre2
+}
+
+build_glib() {
+  done_already glib && return
+  fetch glib; fetch gvdb; fetch proxy-libintl
+  local s="$SRC/glib" w
+  # Meson subprojects from our pinned checkouts; never download.
+  w="$(awk -F' *= *' '$1 == "revision" { print $2 }' "$s/subprojects/gvdb.wrap")"
+  [[ "$w" == "$(lock_field gvdb 3)" ]] || die "glib's gvdb.wrap names $w, versions.lock pins another"
+  rm -rf "$s/subprojects/gvdb" "$s/subprojects/proxy-libintl-0.5"
+  rsync -a --exclude .git "$SRC/gvdb/" "$s/subprojects/gvdb/"
+  rsync -a --exclude .git "$SRC/proxy-libintl/" "$s/subprojects/proxy-libintl-0.5/"
+  run glib-setup hermetic meson setup --wipe "$s/build" "$s" --buildtype=release --wrap-mode=nodownload \
+    -Dtests=false -Dintrospection=disabled -Dman-pages=disabled -Ddocumentation=false \
+    -Dsysprof=disabled -Dnls=disabled -Dlibmount=disabled -Dselinux=disabled -Dxattr=false \
+    -Dglib_debug=disabled -Dinstalled_tests=false "--prefix=$PREFIX" --libdir=lib
+  run glib-install meson install -C "$s/build"
+  stamp glib glib
+}
+
+build_jsonglib() {
+  done_already jsonglib && return
+  fetch json-glib
+  local s="$SRC/json-glib"
+  run jsonglib-setup hermetic meson setup --wipe "$s/build" "$s" --buildtype=release --wrap-mode=nodownload \
+    -Dintrospection=disabled -Dtests=false -Dgtk_doc=disabled -Dman=false -Dnls=disabled \
+    "--prefix=$PREFIX" --libdir=lib
+  run jsonglib-install meson install -C "$s/build"
+  stamp jsonglib json-glib
+}
+
+build_openssl() {
+  done_already openssl && return
+  fetch openssl
+  ( cd "$SRC/openssl"
+    run openssl-configure ./Configure darwin64-arm64-cc shared no-tests no-docs \
+      "--prefix=$PREFIX" --libdir=lib --openssldir="$PREFIX/etc/ssl" -mmacosx-version-min=26.0
+    run openssl-make make -j"$JOBS"
+    run openssl-install make install_sw )
+  stamp openssl openssl
+}
+
+build_slirp() {
+  done_already slirp && return
+  fetch libslirp
+  local s="$SRC/libslirp"
+  run slirp-setup hermetic meson setup --wipe "$s/build" "$s" --buildtype=release --wrap-mode=nodownload \
+    "--prefix=$PREFIX" --libdir=lib
+  run slirp-install meson install -C "$s/build"
+  stamp slirp libslirp
+}
+
+build_png() {
+  done_already png && return
+  fetch libpng
+  local s="$SRC/libpng"
+  run png-cmake hermetic cmake -S "$s" -B "$s/build" -G Ninja "${CMAKE_HERMETIC[@]}" \
+    -DPNG_STATIC=OFF -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_FRAMEWORK=OFF
+  run png-install cmake --build "$s/build" --target install
+  stamp png libpng
+}
+
+build_jpeg() {
+  done_already jpeg && return
+  fetch libjpeg-turbo
+  local s="$SRC/libjpeg-turbo"
+  run jpeg-cmake hermetic cmake -S "$s" -B "$s/build" -G Ninja "${CMAKE_HERMETIC[@]}" \
+    -DENABLE_STATIC=OFF -DWITH_TURBOJPEG=OFF -DWITH_TESTS=OFF -DWITH_TOOLS=OFF
+  run jpeg-install cmake --build "$s/build" --target install
+  stamp jpeg libjpeg-turbo
+}
+
+build_pixman() {
+  done_already pixman && return
+  fetch pixman
+  local s="$SRC/pixman"
+  run pixman-setup hermetic meson setup --wipe "$s/build" "$s" --buildtype=release --wrap-mode=nodownload \
+    -Dtests=disabled -Ddemos=disabled -Dgtk=disabled -Dlibpng=disabled "--prefix=$PREFIX" --libdir=lib
+  run pixman-install meson install -C "$s/build"
+  stamp pixman pixman
+}
+
+LIBS=(pcre2 glib jsonglib openssl slirp png jpeg pixman)
+
 # ------------------------------------------------------------------ components
 
 build_angle() {
@@ -181,8 +293,9 @@ build_libtpms() {
   done_already libtpms && return
   fetch libtpms
   ( cd "$SRC/libtpms"
-    run libtpms-autogen ./autogen.sh "--prefix=$PREFIX" --with-openssl --with-tpm2 \
-      "CPPFLAGS=-I$BREW/opt/openssl@3/include" "LDFLAGS=-L$BREW/opt/openssl@3/lib"
+    # OpenSSL from build/prefix (build_openssl), not Homebrew's.
+    run libtpms-autogen hermetic ./autogen.sh "--prefix=$PREFIX" --with-openssl --with-tpm2 \
+      "CPPFLAGS=-I$PREFIX/include" "LDFLAGS=-L$PREFIX/lib"
     run libtpms-make make -j"$JOBS"
     run libtpms-install make install )
   stamp libtpms libtpms
@@ -191,9 +304,13 @@ build_libtpms() {
 build_swtpm() {
   done_already swtpm && return
   fetch swtpm
+  # 0001: swtpm_cert and swtpm_localca (and their libtasn1/gmp checks) only with gnutls.
+  # Without gnutls, swtpm_cert/swtpm_localca's certificate tools are not
+  # built; Seemless runs only `swtpm socket`.
+  apply_patches swtpm
   ( cd "$SRC/swtpm"
-    run swtpm-autogen ./autogen.sh "--prefix=$PREFIX" --with-openssl --without-seccomp \
-      "CPPFLAGS=-I$BREW/opt/openssl@3/include" "LDFLAGS=-L$BREW/opt/openssl@3/lib"
+    run swtpm-autogen hermetic ./autogen.sh "--prefix=$PREFIX" --with-openssl --without-seccomp --without-gnutls \
+      "CPPFLAGS=-I$PREFIX/include" "LDFLAGS=-L$PREFIX/lib"
     run swtpm-make make -j"$JOBS"
     run swtpm-install make install )
   stamp swtpm swtpm
@@ -206,9 +323,16 @@ build_qemu() {
   local s="$SRC/qemu"
   mkdir -p "$s/build"
   ( cd "$s/build"
-    run qemu-configure ../configure \
+    # Hermetic: links only build/prefix and the macOS SDK (docs/10 L1).
+    # Features Seemless does not use are off, so their libraries are not in
+    # the app (owner, 2026-11-24, option A; docs/02 "Building the host
+    # stack"): gnutls (TLS for VNC/migration, LUKS), SDL (-display sdl),
+    # libusb (USB host passthrough), zstd (qcow2/migration compression).
+    run qemu-configure hermetic ../configure \
       "--extra-cflags=-I$ANGLE_INC" "--extra-ldflags=-L$ANGLE_LIB" \
-      "--prefix=$PREFIX" --target-list=aarch64-softmmu
+      "--prefix=$PREFIX" --target-list=aarch64-softmmu \
+      --disable-gnutls --disable-nettle --disable-gcrypt --disable-sdl --disable-sdl-image \
+      --disable-libusb --disable-zstd
     run qemu-make make -j"$JOBS"
     run qemu-install make install )
   stamp qemu qemu
@@ -283,7 +407,7 @@ build_vkd3d() {
   stamp vkd3d vkd3d-proton-npt
 }
 
-ORDER=(angle epoxy dxmt virgl libtpms swtpm qemu moltenvk vkd3d)
+ORDER=("${LIBS[@]}" angle epoxy dxmt virgl libtpms swtpm qemu moltenvk vkd3d)
 
 # ------------------------------------------------------------------ main
 (( $# > 0 )) || { sed -n '2,17p' "$0"; exit 0; }
@@ -291,7 +415,8 @@ if [[ "$1" == "--force" ]]; then FORCE=1; shift; fi
 
 if [[ "$1" == fetch ]]; then
   fetch webkit-angle /Source/ThirdParty/ANGLE/ /Configurations/ /Tools/ccache/
-  for n in libepoxy dxmt virglrenderer libtpms swtpm qemu moltenvk "${MVK_DEPS[@]}" \
+  for n in pcre2 glib gvdb proxy-libintl json-glib openssl libslirp libpng libjpeg-turbo pixman \
+           libepoxy dxmt virglrenderer libtpms swtpm qemu moltenvk "${MVK_DEPS[@]}" \
            vkd3d-proton-npt directx-native; do fetch "$n"; done
   exit 0
 fi

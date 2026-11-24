@@ -4,13 +4,11 @@
     python3 -I scripts/release/gen_notices.py <repo> <Seemless.app> <version>
     python3 -I scripts/release/gen_notices.py --check <repo>
 
-Reads THIRD_PARTY.md's "Shipped in Seemless.app" table and the
-homebrew-libraries.tsv that bundle_stack.py wrote, then writes into
+Reads THIRD_PARTY.md's "Shipped in Seemless.app" table, then writes into
 Contents/Resources/Licenses/:
 
     THIRD-PARTY-NOTICES.md   component list, source offer, every licence text
     <component>/<file>       each licence file, as shipped by its project
-    homebrew/<formula>/...   licence files from each Homebrew keg
 
 Fails when a listed licence file is missing, so the notices never silently
 drop a component.
@@ -20,7 +18,6 @@ import re
 import shutil
 import sys
 
-LICENCE_NAME = re.compile(r"^(COPYING|LICEN[CS]E|NOTICE|AUTHORS)([.\-_].*)?$|-or-later\.txt$|-only\.txt$", re.I)
 
 
 def slug(name, used):
@@ -47,18 +44,6 @@ def shipped_rows(third_party_md):
         if len(cells) != 6:
             raise SystemExit(f"gen_notices: bad row (want 6 cells): {line}")
         rows.append(dict(zip(["component", "version", "licence", "source", "files", "as"], cells)))
-    return rows
-
-
-def homebrew_rows(tsv):
-    rows = []
-    if not os.path.exists(tsv):
-        return rows
-    for line in open(tsv, encoding="utf-8"):
-        if line.startswith("#") or not line.strip():
-            continue
-        f = line.rstrip("\n").split("\t")
-        rows.append(dict(zip(["formula", "version", "licence", "url", "sha256", "homepage", "files"], f)))
     return rows
 
 
@@ -93,8 +78,8 @@ def main(argv):
         "licence; the full texts follow the tables and are also in this folder "
         "(`Contents/Resources/Licenses/`).\n\n"
         "**Source code.** The complete corresponding source for this release of the "
-        "GPL and LGPL components (QEMU, iPXE, DXMT, vkd3d-proton and the GNU/GNOME "
-        "libraries), and the source of every other component listed here, is "
+        "GPL and LGPL components (QEMU, iPXE, DXMT, vkd3d-proton, GLib, JSON-GLib and "
+        "proxy-libintl), and the source of every other component listed here, is "
         "published as `Seemless-" + version + "-sources` next to this release, built "
         "by `scripts/release/source-archive.sh` from the exact revisions below plus "
         "Seemless's patches (`patches/`).\n\n"
@@ -124,37 +109,13 @@ def main(argv):
             texts.append((f"{r['component']}: {os.path.basename(rel)}", os.path.relpath(dest, lic),
                           open(src, encoding="utf-8", errors="replace").read()))
 
-    hb = homebrew_rows(os.path.join(lic, "homebrew-libraries.tsv"))
-    if hb:
-        out.append("\n## Libraries from Homebrew\n")
-        out.append("Built by Homebrew (https://brew.sh); Seemless copies them unmodified "
-                   "except for their install names.\n")
-        out.append("| Library | Version | Licence | Source | Files |")
-        out.append("|---|---|---|---|---|")
-        for r in hb:
-            out.append(f"| {r['formula']} | {r['version']} | {r['licence']} | {r['url']} | {r['files']} |")
-            keg = os.path.realpath(os.path.join("/opt/homebrew/Cellar", r["formula"], r["version"]))
-            found = []
-            if os.path.isdir(keg):
-                for name in sorted(os.listdir(keg)):
-                    if LICENCE_NAME.search(name) and os.path.isfile(os.path.join(keg, name)):
-                        found.append(name)
-            if not found:
-                raise SystemExit(f"gen_notices: Homebrew {r['formula']} {r['version']}: no licence file in {keg}")
-            dest_dir = os.path.join(lic, "homebrew", r["formula"])
-            os.makedirs(dest_dir, exist_ok=True)
-            for name in found:
-                shutil.copyfile(os.path.join(keg, name), os.path.join(dest_dir, name))
-                texts.append((f"{r['formula']} (Homebrew): {name}", f"homebrew/{r['formula']}/{name}",
-                              open(os.path.join(keg, name), encoding="utf-8", errors="replace").read()))
-
     out.append("\n## Licence texts\n")
     for heading, path, text in texts:
         out.append(f"### {heading}\n\n`{path}`\n\n```text\n{text.rstrip()}\n```\n")
 
     with open(os.path.join(lic, "THIRD-PARTY-NOTICES.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(out) + "\n")
-    print(f"notices: {len(texts)} licence files, {len(hb)} Homebrew libraries -> {lic}")
+    print(f"notices: {len(texts)} licence files -> {lic}")
     return 0
 
 

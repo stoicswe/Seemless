@@ -34,7 +34,11 @@ rev="$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 git diff --quiet HEAD -- guest/agent proto 2>/dev/null || rev="$rev+dirty"
 export SEEMLESS_AGENT_REV="$rev"
 
-"$CARGO" xwin build --manifest-path guest/agent/Cargo.toml --target "$TARGET" --release -p svc -p session
+# Run from guest/agent: rustup picks the toolchain from the current
+# directory's rust-toolchain.toml (pinned, with the Windows target), not
+# from --manifest-path. From the repo root it used the default stable
+# toolchain, which has no Windows target ("can't find crate for `core`").
+(cd guest/agent && "$CARGO" xwin build --target "$TARGET" --release -p svc -p session)
 
 BIN="$ROOT/guest/agent/target/$TARGET/release"
 mkdir -p "$OUT"

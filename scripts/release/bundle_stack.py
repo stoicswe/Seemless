@@ -17,13 +17,11 @@ libEGL from libepoxy, libdxmt-native from virglrenderer) searches the
 caller's and the main executable's LC_RPATH, so no DYLD_* variable is needed
 (entitled binaries ignore them anyway).
 
-Homebrew libraries pulled in by the closure are recorded in
-Contents/Resources/Licenses/homebrew-libraries.tsv (formula, version,
-licence, source URL, sha256) for the notices file and the source archive.
-Writes nothing outside the bundle. scripts/release/audit-bundle.sh checks the
+Every library must come from build/prefix (pinned sources,
+scripts/build-deps.sh): a dependency resolving into Homebrew stops the
+build. Writes nothing outside the bundle. scripts/release/audit-bundle.sh checks the
 result.
 """
-import json
 import os
 import shutil
 import subprocess
@@ -49,20 +47,10 @@ DLOPENED = [
     "lib/libMoltenVK.dylib",               # vkd3d-proton, @loader_path/libMoltenVK.dylib; venus by leaf name
 ]
 
-# Homebrew libraries loaded with dlopen under a fixed leaf name:
-# (formula, file in its lib/, leaf name in Contents/Frameworks).
-HOMEBREW_DLOPENED = [
-    # sdl2-compat (QEMU links SDL2) dlopens @loader_path/libSDL3.dylib in its
-    # initializer and shows a modal "Failed loading SDL3" alert, blocking
-    # QEMU, when it is missing.
-    ("sdl3", "libSDL3.0.dylib", "libSDL3.dylib"),
-]
-
 # QEMU data files needed by the aarch64 virt machine we run (docs/02).
 QEMU_DATA = [
     "edk2-aarch64-code.fd",  # UEFI firmware (pflash unit 0)
     "efi-virtio.rom",        # virtio-net-pci option ROM
-    "efi-e1000e.rom",
     "keymaps",               # -k / VNC keymaps; small, kept for parity with the prefix
     "firmware",              # firmware descriptor JSON
 ]
@@ -119,17 +107,12 @@ def resolve(dep, source, source_rpaths, executable_dir):
         candidates.append(dep)
     for c in candidates:
         if os.path.exists(c):
-            return os.path.realpath(c)
+            real = os.path.realpath(c)
+            if real.startswith(("/opt/homebrew/", "/usr/local/")):
+                raise SystemExit(f"bundle_stack: {source} links {dep} from Homebrew; the app ships only "
+                                 "libraries built from pinned source (scripts/build-deps.sh)")
+            return real
     raise SystemExit(f"bundle_stack: {source}: cannot resolve dependency {dep}")
-
-
-def homebrew_formula(path):
-    """'/opt/homebrew/Cellar/glib/2.86.1/lib/x.dylib' -> ('glib', '2.86.1')."""
-    parts = os.path.realpath(path).split(os.sep)
-    if "Cellar" in parts:
-        i = parts.index("Cellar")
-        return parts[i + 1], parts[i + 2]
-    return None
 
 
 def main(argv):
@@ -182,9 +165,6 @@ def main(argv):
         executables.append((src, os.path.join(helpers_dir, name)))
     for rel in DLOPENED:
         add_lib(os.path.join(prefix, rel))
-    for formula, file, leaf in HOMEBREW_DLOPENED:
-        brew_prefix = run("brew", "--prefix", formula).strip()
-        add_lib(os.path.join(brew_prefix, "lib", file), leaf)
 
     # Walk the dependency closure. Map each Mach-O to its rewrites.
     rewrites = {}  # dest -> list of (old, new)
@@ -205,7 +185,6 @@ def main(argv):
         rewrites[copied[src]] = (src, changes, rpaths)
 
     exe_dests = {d for _, d in executables}
-    homebrew = {}
     for dest, (src, changes, rpaths) in sorted(rewrites.items()):
         shutil.copyfile(src, dest)
         os.chmod(dest, 0o755)
@@ -222,9 +201,6 @@ def main(argv):
         # invalidates them. sign-app.sh re-signs everything afterwards.
         run("install_name_tool", *args, dest)
         run("codesign", "--remove-signature", dest, check=False)
-        hb = homebrew_formula(src)
-        if hb:
-            homebrew.setdefault(hb, []).append(os.path.basename(dest))
 
     # QEMU data.
     share = os.path.join(prefix, "share", "qemu")
@@ -236,34 +212,7 @@ def main(argv):
         else:
             shutil.copyfile(s, d)
 
-    # Homebrew manifest, with each formula's licence and exact source.
-    rows = []
-    for (formula, version), libs in sorted(homebrew.items()):
-        info = {}
-        try:
-            info = json.loads(run("brew", "info", "--json=v2", formula))["formulae"][0]
-        except Exception as e:  # brew missing: still record what we know
-            print(f"bundle_stack: warning: brew info {formula}: {e}", file=sys.stderr)
-        stable = info.get("urls", {}).get("stable", {})
-        url, sha = stable.get("url", ""), stable.get("checksum", "")
-        current = info.get("versions", {}).get("stable", "")
-        # Bottle versions carry a _N rebuild suffix (3.8.13_2); the formula's
-        # source URL is only right when the upstream version matches.
-        if not current or version.split("_")[0] != current:
-            print(f"bundle_stack: warning: {formula} installed {version}, formula source is {current or '?'}: "
-                  "source marked STALE (run `brew upgrade` and package again)", file=sys.stderr)
-            url, sha = "STALE", ""
-        rows.append("\t".join([
-            formula, version, info.get("license") or "UNKNOWN",
-            url, sha, info.get("homepage", ""),
-            " ".join(sorted(libs)),
-        ]))
-    with open(os.path.join(lic_dir, "homebrew-libraries.tsv"), "w") as f:
-        f.write("# formula\tversion\tlicence\tsource_url\tsha256\thomepage\tbundled_files\n")
-        f.write("\n".join(rows) + "\n")
-
-    print(f"bundled {len(exe_dests)} helpers, {len(copied) - len(exe_dests)} libraries "
-          f"({len(homebrew)} Homebrew formulae) into {contents}")
+    print(f"bundled {len(exe_dests)} helpers, {len(copied) - len(exe_dests)} libraries into {contents}")
     return 0
 
 

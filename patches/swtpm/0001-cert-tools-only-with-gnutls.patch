@@ -1,0 +1,52 @@
+diff --git a/configure.ac b/configure.ac
+index 7e68059..233f637 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -172,10 +172,10 @@ openssl)
+ 	;;
+ esac
+ 
+-LIBTASN1_LIBS=$(pkg-config --libs libtasn1)
+-if test $? -ne 0; then
+-	AC_MSG_ERROR("Is libtasn1-devel installed? -- could not get libs for libtasn1")
+-fi
++dnl libtasn1 is only linked by swtpm_cert, which is only built with gnutls;
++dnl it is required below once gnutls is known to be enabled.
++LIBTASN1_LIBS=$(pkg-config --libs libtasn1 2>/dev/null)
++have_libtasn1=$?
+ AC_SUBST([LIBTASN1_LIBS])
+ 
+ PKG_CHECK_MODULES(
+@@ -349,6 +349,9 @@ fi
+ if test "x$with_gnutls" != "xno"; then
+     with_gnutls="yes"
+ fi
++if test "x$with_gnutls" = "xyes" && test "$have_libtasn1" -ne 0; then
++	AC_MSG_ERROR("Is libtasn1-devel installed? -- could not get libs for libtasn1")
++fi
+ AM_CONDITIONAL([WITH_GNUTLS], [test "x$with_gnutls" = "xyes"])
+ AC_SUBST([GNUTLS_LIBS])
+ 
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 9e03c78..79d8197 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -8,11 +8,16 @@ SUBDIRS = \
+ 	utils \
+ 	swtpm \
+ 	swtpm_bios \
+-	swtpm_cert \
+ 	swtpm_ioctl \
+-	swtpm_localca \
+ 	swtpm_setup
+ 
++# The certificate tools need gnutls, libtasn1 and gmp.
++if WITH_GNUTLS
++SUBDIRS += \
++	swtpm_cert \
++	swtpm_localca
++endif
++
+ if WITH_SELINUX
+ SUBDIRS += \
+ 	selinux

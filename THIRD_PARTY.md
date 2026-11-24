@@ -11,11 +11,10 @@ must be read by hand before the component ships.
 `Contents/Resources/Licenses/THIRD-PARTY-NOTICES.md` and to copy each
 licence file into the app; a missing file fails the release build. Paths are
 relative to the repository (`build/src/<name>` is the checkout of the pin in
-`scripts/versions.lock`). Libraries that come from Homebrew are listed per
-release in `Contents/Resources/Licenses/homebrew-libraries.tsv` (written by
-`scripts/release/bundle_stack.py` from `brew info`), not here.
-`scripts/release/source-archive.sh` builds the source offer for every row
-plus the Homebrew libraries.
+`scripts/versions.lock`). Nothing in the app comes from Homebrew: every
+library is built from a pinned source by `scripts/build-deps.sh`, and
+`bundle_stack.py` refuses a Homebrew library (owner, 2026-11-24).
+`scripts/release/source-archive.sh` builds the source offer for every row.
 
 | Component | Version / SHA | Licence | Source | Licence files | In the app as |
 |-----------|---------------|---------|--------|---------------|---------------|
@@ -39,6 +38,16 @@ plus the Homebrew libraries.
 | cereal | `a56bad8` | BSD-3-Clause | https://github.com/USCiLab/cereal | build/src/mvk-cereal/LICENSE | In MoltenVK |
 | stefanberger/swtpm | v0.10.2 `32b5a05` | BSD-3-Clause | https://github.com/stefanberger/swtpm | build/src/swtpm/LICENSE | `Helpers/swtpm`, `Frameworks/libswtpm_libtpms.0.dylib` |
 | stefanberger/libtpms | v0.10.2 `03ff248` | IBM BSD-3-Clause-style (library, TPM 1.2); TCG BSD-style licence for the TPM 2.0 code, which grants **no patent licence** (`LICENSE`, read 2026-11-24) | https://github.com/stefanberger/libtpms | build/src/libtpms/LICENSE | `Frameworks/libtpms.0.dylib` |
+| GLib | 2.90.1 `e05063c` | LGPL-2.1-or-later (some files other licences, `LICENSES/`) | https://gitlab.gnome.org/GNOME/glib | build/src/glib/COPYING, build/src/glib/LICENSES/LGPL-2.1-or-later.txt | `Frameworks/libglib-2.0.0.dylib`, `libgobject`, `libgio`, `libgmodule` (replaceable dylibs) |
+| gvdb | `2b42fc7` (GLib's wrap) | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/gvdb | build/src/gvdb/COPYING | In `libgio` |
+| proxy-libintl | 0.5 `33934de` | LGPL-2.0-or-later | https://github.com/frida/proxy-libintl | build/src/proxy-libintl/COPYING | `Frameworks/libintl.8.dylib` (GLib's gettext stub; replaceable) |
+| PCRE2 | 10.49 `6f9d7c1` | BSD-3-Clause (with PCRE2 exception) | https://github.com/PCRE2Project/pcre2 | build/src/pcre2/LICENCE.md | `Frameworks/libpcre2-8.0.dylib` |
+| JSON-GLib | 1.10.8 `8273a7d` | LGPL-2.1-or-later | https://gitlab.gnome.org/GNOME/json-glib | build/src/json-glib/COPYING | `Frameworks/libjson-glib-1.0.0.dylib` (replaceable; used by swtpm) |
+| OpenSSL | 3.5.9 `45e844f` | Apache-2.0 | https://github.com/openssl/openssl | build/src/openssl/LICENSE.txt | `Frameworks/libcrypto.3.dylib` (libtpms, swtpm) |
+| libslirp | 4.9.7 `ce12dcd` | BSD-3-Clause (and the original Slirp licence) | https://gitlab.freedesktop.org/slirp/libslirp | build/src/libslirp/LICENSE, build/src/libslirp/COPYRIGHT | `Frameworks/libslirp.0.dylib` (user-mode network) |
+| pixman | 0.46.4 `9cc163c` | MIT | https://gitlab.freedesktop.org/pixman/pixman | build/src/pixman/COPYING | `Frameworks/libpixman-1.0.dylib` |
+| libpng | 1.6.59 `cd952f4` | libpng-2.0 | https://github.com/pnggroup/libpng | build/src/libpng/LICENSE | `Frameworks/libpng16.16.dylib` (QEMU screendump) |
+| libjpeg-turbo | 3.2.1 `7b49937` | IJG AND BSD-3-Clause AND Zlib | https://github.com/libjpeg-turbo/libjpeg-turbo | build/src/libjpeg-turbo/LICENSE.md, build/src/libjpeg-turbo/README.ijg | `Frameworks/libjpeg.62.dylib` |
 | swift-protobuf | 1.41.0 | Apache-2.0 | https://github.com/apple/swift-protobuf | kit/.build/checkouts/swift-protobuf/LICENSE.txt | In the app and `seemlessctl` |
 | swift-argument-parser | 1.8.2 | Apache-2.0 | https://github.com/apple/swift-argument-parser | kit/.build/checkouts/swift-argument-parser/LICENSE.txt | In `Helpers/seemlessctl` |
 

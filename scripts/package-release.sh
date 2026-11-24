@@ -3,9 +3,11 @@
 # WP8.2, WP8.5). Runbook and the owner's one-time setup: docs/release.md.
 #
 #   scripts/package-release.sh                  ad-hoc signed, local testing
+#   SEEMLESS_SIGN_IDENTITY="Seemless Self-Signed" \
+#     scripts/package-release.sh                self-signed (Preview 1), not notarized
 #   SEEMLESS_SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
 #   SEEMLESS_NOTARY_PROFILE=seemless-notary \
-#     scripts/package-release.sh                Developer ID + notarization
+#     scripts/package-release.sh                Developer ID + notarization (later)
 #
 # Options:
 #   --skip-notarize        sign with the identity but do not submit
@@ -56,7 +58,7 @@ step "assemble build/release/Seemless.app"
 mkdir -p "$out"
 app="$out/Seemless.app"
 # Leave an existing source offer (Seemless-*-sources/) alone.
-rm -rf "$app" "$out"/Seemless-*.dmg "$out"/Seemless-*.zip "$out"/SHA256SUMS "$out"/audit.txt "$out"/notarize.txt
+rm -rf "$app" "$out"/Seemless-*.dmg "$out"/Seemless-*.zip "$out"/SHA256SUMS "$out"/audit.txt "$out"/notarize.txt "$out"/sign.txt
 ditto "$repo/build/app/Seemless.app" "$app"
 codesign --remove-signature "$app" 2>/dev/null || true
 python3 -I "$rel/bundle_stack.py" "$prefix" "$app" --seemlessctl "$ctl"
@@ -65,12 +67,16 @@ rsync -a --exclude 'recipes/inventory' --exclude '.DS_Store' "$repo/image/" "$ap
 python3 -I "$rel/gen_notices.py" "$repo" "$app" "$version"
 
 step "audit"
-"$rel/audit-bundle.sh" "${audit_flags[@]}" "$app" | tee "$out/audit.txt"
+"$rel/audit-bundle.sh" ${audit_flags[@]+"${audit_flags[@]}"} "$app" | tee "$out/audit.txt"
 releasable=1
 grep -q "NOT RELEASABLE" "$out/audit.txt" && releasable=0
 
 step "sign"
-SEEMLESS_SIGN_IDENTITY="${identity:--}" "$rel/sign-app.sh" "$app"
+SEEMLESS_SIGN_IDENTITY="${identity:--}" "$rel/sign-app.sh" "$app" | tee "$out/sign.txt"
+kind="$(sed -n 's/^sign: kind=\([a-z-]*\).*/\1/p' "$out/sign.txt")"
+dmg_flags=(--force)
+[[ -n "${SEEMLESS_SIGN_KEYCHAIN:-}" ]] && dmg_flags+=(--keychain "$SEEMLESS_SIGN_KEYCHAIN")
+[[ $kind == developer-id ]] && dmg_flags+=(--timestamp)
 
 step "dmg"
 dmg="$out/Seemless-$version.dmg"
@@ -78,26 +84,32 @@ stage="$(mktemp -d)"; trap 'rm -rf "$stage"' EXIT
 ditto "$app" "$stage/Seemless.app"
 ln -s /Applications "$stage/Applications"
 hdiutil create -quiet -volname "Seemless $version" -srcfolder "$stage" -fs APFS -format UDZO -ov "$dmg"
-if [[ -n "$identity" ]]; then codesign --force --timestamp --sign "$identity" "$dmg"; fi
+if [[ $kind != adhoc ]]; then codesign "${dmg_flags[@]}" --sign "$identity" "$dmg"; fi
 
-if [[ -n "$identity" && -n "$profile" && $notarize == 1 ]]; then
-  if [[ $releasable == 0 ]]; then
-    echo "package: not notarizing: the audit marked this build NOT RELEASABLE" >&2
-  else
-    step "notarize (notarytool, profile $profile)"
-    # Notarizing the dmg also notarizes the app inside it (tickets are per
-    # code hash), so both can be stapled from one submission.
-    xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait | tee "$out/notarize.txt"
-    grep -q "status: Accepted" "$out/notarize.txt" || { echo "package: notarization not accepted (xcrun notarytool log <id> --keychain-profile $profile)" >&2; exit 1; }
-    xcrun stapler staple "$dmg"
-    xcrun stapler staple "$app"
-    spctl --assess --type execute -vv "$app"
-  fi
-elif [[ -n "$identity" ]]; then
-  echo "package: signed, not notarized (set SEEMLESS_NOTARY_PROFILE)"
-else
-  echo "package: ad-hoc signed: runs on this Mac only; not for publishing"
-fi
+case "$kind" in
+  developer-id)
+    if [[ -z "$profile" || $notarize == 0 ]]; then
+      echo "package: Developer ID signed, not notarized (set SEEMLESS_NOTARY_PROFILE)"
+    elif [[ $releasable == 0 ]]; then
+      echo "package: not notarizing: the audit marked this build NOT RELEASABLE" >&2
+    else
+      step "notarize (notarytool, profile $profile)"
+      # Notarizing the dmg also notarizes the app inside it (tickets are per
+      # code hash), so both can be stapled from one submission.
+      xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait | tee "$out/notarize.txt"
+      grep -q "status: Accepted" "$out/notarize.txt" || { echo "package: notarization not accepted (xcrun notarytool log <id> --keychain-profile $profile)" >&2; exit 1; }
+      xcrun stapler staple "$dmg"
+      xcrun stapler staple "$app"
+      spctl --assess --type execute -vv "$app"
+    fi ;;
+  self-signed)
+    # Apple notarizes only Developer ID code. Preview 1 ships like this
+    # (owner, 2026-11-24); testers allow the app once (docs/release.md).
+    [[ -n "$profile" ]] && echo "package: SEEMLESS_NOTARY_PROFILE ignored: a self-signed app cannot be notarized"
+    echo "package: self-signed, not notarized: Gatekeeper asks testers to allow it once (docs/release.md)" ;;
+  *)
+    echo "package: ad-hoc signed: runs on this Mac only; not for publishing" ;;
+esac
 
 step "zip and checksums"
 zip="$out/Seemless-$version.zip"
