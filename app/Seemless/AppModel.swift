@@ -342,6 +342,14 @@ final class AppModel {
                              message: "“\(name)” is quarantined with its guest agent off. Turn it on in Settings ▸ Quarantine, then restart the VM.")
             return
         }
+        // WacOS VMs (experimental): its own menu bar, Dock and Mac title bars
+        // would double up with the real Mac ones. Zen with WacOS comes after
+        // testing it in desktop mode (owner, 2026-11-24; docs/05).
+        if item(name)?.config.hasWacOS == true {
+            error = AppError(title: "Zen mode is off for WacOS VMs",
+                             message: "“\(name)” runs the experimental WacOS shell. Use the desktop window for now; Zen mode with WacOS comes later.")
+            return
+        }
         let agentSocket = env["SEEMLESS_ZEN_AGENT"].map { URL(filePath: $0) } ?? remote.record.run.agentSocket
         let scale = env["SEEMLESS_ZEN_SCALE"].flatMap(Double.init).map { CGFloat($0) } ?? 1
         // Zen and the desktop window are two views of one screen and share

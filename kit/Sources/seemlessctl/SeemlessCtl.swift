@@ -766,6 +766,13 @@ struct ImageCommand: AsyncParsableCommand {
             Microsoft's licence page is shown during setup for you to accept in the VM window, unless you pass \
             --accept-windows-license, which states that you have read and accept Microsoft's licence terms.
 
+            --wacos (EXPERIMENTAL) also sets Windows up with WacOS, a macOS-style shell that replaces the \
+            taskbar and Start menu (github.com/renzyxx/WacOS). Seemless ships none of it: at the first \
+            sign-in with the network on, Windows downloads the pinned official release, checks its SHA-256 \
+            and runs WacOS's own installer. WacOS is source-available for personal, non-commercial use only; \
+            --accept-wacos-license states that you have read and accept its licence. Zen mode is off for \
+            WacOS VMs for now.
+
             Untested until spike S4 (docs/09): expect to debug the first runs with the window open.
             """
         )
@@ -786,10 +793,16 @@ struct ImageCommand: AsyncParsableCommand {
         @Flag(help: "Quarantine the new VM: no connection to the Mac except keyboard, mouse and display.") var quarantine = false
         @Flag(name: .customLong("accept-windows-license"),
               help: "I have read and accept Microsoft's Windows licence terms; skip the licence page.") var acceptLicense = false
+        @Flag(help: "EXPERIMENTAL: install the WacOS shell (downloaded by Windows from its official release; see below).") var wacos = false
+        @Flag(name: .customLong("accept-wacos-license"),
+              help: "I have read and accept the WacOS licence (\(WacOSRelease.licenseURL.absoluteString)).") var acceptWacOSLicense = false
 
         func validate() throws {
             if headless && !acceptLicense {
                 throw ValidationError("--headless needs --accept-windows-license: without a window nobody can accept the licence page")
+            }
+            if wacos && !acceptWacOSLicense {
+                throw ValidationError("--wacos needs --accept-wacos-license: WacOS is source-available for personal, non-commercial use only; read \(WacOSRelease.licenseURL.absoluteString) first")
             }
         }
 
@@ -808,6 +821,11 @@ struct ImageCommand: AsyncParsableCommand {
             request.agent = agent.map { URL(filePath: $0, directoryHint: .isDirectory) }
             request.installAgent = !noAgent
             request.testSigning = testSigning
+            if wacos {
+                request.wacos = .pinned
+                request.acceptWacOSLicense = acceptWacOSLicense
+            }
+            try ImageBuilder.checkWacOS(request)
 
             let builder = ImageBuilder(layout: vm.layout, stack: try vm.stack(), assets: try ImageCommand.assets())
             let report = try await builder.build(request) { line in
@@ -987,6 +1005,7 @@ func printConfig(_ c: VMConfig) {
         print("quarantine on; connections on: \(on.isEmpty ? "none" : on.joined(separator: ", "))\(q.agent ? "" : " (no guest agent)")")
     }
     if c.offlineUntilSetupDone { print("network  offline until Windows' first setup reaches the desktop") }
+    if let w = c.wacos { print("shell    WacOS \(w.tag) (experimental; Zen mode off)") }
 }
 
 func gib(_ bytes: UInt64) -> String { String(format: "%.2f GiB", Double(bytes) / 1_073_741_824) }

@@ -239,6 +239,11 @@ if not exist "%W%\ProgramData\Seemless" mkdir "%W%\ProgramData\Seemless"
 call :run copy /y "%S%\guest\SeemlessLauncher.ps1" "%W%\ProgramData\Seemless\SeemlessLauncher.ps1" || goto :eof
 call :run copy /y "%S%\guest\register-launcher.ps1" "%W%\ProgramData\Seemless\register-launcher.ps1" || goto :eof
 call :run copy /y "%S%\guest\setup-account.ps1" "%W%\ProgramData\Seemless\setup-account.ps1" || goto :eof
+rem Experimental WacOS shell (docs/03 "Optional: WacOS"): only on payloads
+rem of VMs set up with it. firstboot.cmd registers its logon task.
+if exist "%S%\wacos\install-wacos.ps1" (
+  call :run xcopy "%S%\wacos" "%W%\ProgramData\Seemless\wacos" /e /i /h /y || goto :eof
+)
 
 rem ---------------------------------------------------------------- boot
 set "STAGE=bootloader"

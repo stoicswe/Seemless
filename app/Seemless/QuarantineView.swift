@@ -72,3 +72,53 @@ struct QuarantineBadge: View {
             .fixedSize()
     }
 }
+
+/// The experimental WacOS option of an automatic install (owner,
+/// 2026-11-24; SeemlessKit `WacOSRelease`). Seemless ships none of WacOS:
+/// Windows downloads the official release after setup. Its licence is the
+/// person's to accept, so the switch alone is not enough.
+struct WacOSFields: View {
+    @Binding var enabled: Bool
+    @Binding var licenseAccepted: Bool
+    var networkAvailable: Bool
+
+    var body: some View {
+        Section {
+            Toggle(isOn: $enabled) {
+                Text("Mac-style desktop (WacOS)")
+                Text("Replaces the Windows taskbar and Start menu with WacOS’s menu bar, Dock, Finder and Spotlight. Windows downloads WacOS \(WacOSRelease.pinned.tag) from its GitHub releases at the first sign-in once the network is on (about 190 MB).")
+            }
+            .disabled(!networkAvailable)
+            if !networkAvailable {
+                Text("Needs the network: this VM is quarantined with its network off.")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else if enabled {
+                Toggle(isOn: $licenseAccepted) {
+                    Text("I accept the WacOS licence")
+                    Text("WacOS is a separate project, source-available for personal, non-commercial use only. It is not part of Seemless and Seemless does not maintain it.")
+                }
+                Link("Read the WacOS licence", destination: WacOSRelease.licenseURL)
+                    .font(.callout)
+                Label("Zen mode is off for VMs with WacOS for now.", systemImage: "info.circle")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        } header: {
+            HStack(spacing: 6) {
+                Text("Desktop")
+                ExperimentalBadge()
+            }
+        }
+    }
+}
+
+/// A small "Experimental" chip.
+struct ExperimentalBadge: View {
+    var body: some View {
+        Text("Experimental")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.purple)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .glassEffect(.regular.tint(Color.purple.opacity(0.12)), in: .capsule)
+            .fixedSize()
+    }
+}

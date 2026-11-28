@@ -304,6 +304,16 @@ Windows from the same guest application should group like a Mac app:
   become possible. It is a significant piece of work; keep the `WindowBridge`
   API process-agnostic from the start so it can move out of process later.
 
+## WacOS VMs (experimental)
+
+A VM set up with the WacOS shell (docs/03 "Optional: WacOS") has no Zen
+mode for now: the app disables the Zen item and `enterZen` refuses
+(`VMConfig.hasWacOS`). WacOS draws its own menu bar, Dock and Mac title
+bars inside Windows, which would double up with the Mac's. The owner wants
+Zen with WacOS after it is tested in desktop mode (roadmap WP5.8): the
+window model would have to drop WacOS's bar and Dock windows and keep its
+title bars off mirrored windows.
+
 ## Mode transitions
 
 | From → To | Trigger |

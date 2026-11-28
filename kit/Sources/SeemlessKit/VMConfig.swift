@@ -32,6 +32,10 @@ public struct VMConfig: Codable, Sendable, Equatable {
     /// device is not there at all, so changes apply at the next start.
     /// Chosen when the VM is created; can be lifted while it is stopped.
     public var quarantine: Quarantine?
+    /// The experimental WacOS shell (owner, 2026-11-24; Image/WacOS.swift):
+    /// the release this VM's setup installs. nil for a normal VM. Zen mode
+    /// is off for these VMs for now (docs/05).
+    public var wacos: WacOSRelease?
 
     public init(
         name: String = "default",
@@ -45,7 +49,8 @@ public struct VMConfig: Codable, Sendable, Equatable {
         boot: BootSettings = BootSettings(),
         media: [AttachedMedia] = [],
         offlineUntilSetupDone: Bool = false,
-        quarantine: Quarantine? = nil
+        quarantine: Quarantine? = nil,
+        wacos: WacOSRelease? = nil
     ) {
         self.name = name
         self.cpuCount = cpuCount
@@ -59,11 +64,12 @@ public struct VMConfig: Codable, Sendable, Equatable {
         self.media = media
         self.offlineUntilSetupDone = offlineUntilSetupDone
         self.quarantine = quarantine
+        self.wacos = wacos
     }
 
     private enum CodingKeys: String, CodingKey {
         case name, cpuCount, memoryMiB, diskSizeGiB, graphicsBackend, network, portForwards, macAddress, boot, media,
-             offlineUntilSetupDone, quarantine
+             offlineUntilSetupDone, quarantine, wacos
     }
 
     /// Fields added after the first release decode with defaults, so older
@@ -82,6 +88,7 @@ public struct VMConfig: Codable, Sendable, Equatable {
         media = try c.decodeIfPresent([AttachedMedia].self, forKey: .media) ?? []
         offlineUntilSetupDone = try c.decodeIfPresent(Bool.self, forKey: .offlineUntilSetupDone) ?? false
         quarantine = try c.decodeIfPresent(Quarantine.self, forKey: .quarantine)
+        wacos = try c.decodeIfPresent(WacOSRelease.self, forKey: .wacos)
     }
 
     /// Firmware-level settings: what the UEFI firmware tries first and which

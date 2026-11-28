@@ -24,6 +24,9 @@ struct NewVMView: View {
     @State private var username = "Seemless"
     @State private var startNow = true
     @State private var creating = false
+    /// Experimental WacOS shell (automatic installs only; WacOSFields).
+    @State private var wacos = false
+    @State private var acceptWacOSLicense = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -117,6 +120,11 @@ struct NewVMView: View {
                 HardwareFields(config: $config)
 
                 QuarantineFields(config: $config, creating: true)
+
+                if mode == .automatic {
+                    WacOSFields(enabled: $wacos, licenseAccepted: $acceptWacOSLicense,
+                                networkAvailable: config.effectiveNetwork != .none)
+                }
 
                 let errors = problems
                 if !errors.isEmpty, iso != nil {
@@ -228,8 +236,13 @@ struct NewVMView: View {
         if mode == nil { missing.append("an install type") }
         if mode == .automatic, profile == nil { missing.append("a Windows profile") }
         if mode == .automatic, !SetupPayload.Settings.isValidUsername(username) { missing.append("a valid account name") }
+        if mode == .automatic, wantsWacOS, !acceptWacOSLicense { missing.append("whether you accept the WacOS licence") }
         return missing
     }
+
+    /// WacOS needs the network (Windows downloads it), so a quarantine
+    /// with the network off drops the choice.
+    private var wantsWacOS: Bool { wacos && config.effectiveNetwork != .none }
 
     private var canCreate: Bool {
         guard !creating, model.item(config.name) == nil, problems.isEmpty, missingChoices.isEmpty else { return false }
@@ -253,6 +266,10 @@ struct NewVMView: View {
             request.imageIndex = edition
             request.recipe = profile.recipe
             request.username = username
+            if wantsWacOS {
+                request.wacos = .pinned
+                request.acceptWacOSLicense = acceptWacOSLicense
+            }
             model.createAutomatic(request)
             dismiss()
         case .manual:

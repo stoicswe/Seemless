@@ -27,6 +27,13 @@ public struct ImageBuilder: Sendable {
         /// false: no agent at all, even if `GuestTools.locate()` finds one.
         public var installAgent: Bool = true
         public var testSigning: Bool = false
+        /// EXPERIMENTAL WacOS shell (Image/WacOS.swift): the release the
+        /// guest downloads after first setup. Needs `acceptWacOSLicense`
+        /// and a network (not a quarantined VM with the network off).
+        public var wacos: WacOSRelease?
+        /// Only true when the person explicitly accepted the WacOS licence
+        /// (personal, non-commercial use; WacOS.licenseURL).
+        public var acceptWacOSLicense: Bool = false
 
         public init(iso: URL, vm: VMConfig) {
             self.iso = iso
@@ -45,12 +52,18 @@ public struct ImageBuilder: Sendable {
 
     public enum BuildError: Error, CustomStringConvertible {
         case vmExists(String), noSupportedImage([String]), noSuchIndex(Int), unsupported(Int, [String])
+        case wacosLicenseNotAccepted, wacosNeedsNetwork, wacosInvalid([String])
         public var description: String {
             switch self {
             case .vmExists(let n): return "VM '\(n)' already exists; delete it or choose another --name"
             case .noSupportedImage(let why): return "no supported edition on this ISO: " + why.joined(separator: "; ")
             case .noSuchIndex(let i): return "the ISO has no image with index \(i)"
             case .unsupported(let i, let why): return "image \(i) is not supported: " + why.joined(separator: "; ")
+            case .wacosLicenseNotAccepted:
+                return "WacOS is source-available for personal, non-commercial use; read \(WacOSRelease.licenseURL.absoluteString) and accept it to install it"
+            case .wacosNeedsNetwork:
+                return "WacOS is downloaded by Windows after setup, so the VM needs a network (it is quarantined with the network off, or has none)"
+            case .wacosInvalid(let why): return "WacOS release: " + why.joined(separator: "; ")
             }
         }
     }
@@ -77,9 +90,19 @@ public struct ImageBuilder: Sendable {
         self.assets = assets
     }
 
+    /// Checks the WacOS option before anything is created.
+    public static func checkWacOS(_ request: Request) throws {
+        guard let wacos = request.wacos else { return }
+        guard request.acceptWacOSLicense else { throw BuildError.wacosLicenseNotAccepted }
+        guard request.vm.effectiveNetwork != .none else { throw BuildError.wacosNeedsNetwork }
+        let errors = wacos.validationErrors
+        guard errors.isEmpty else { throw BuildError.wacosInvalid(errors) }
+    }
+
     public func build(_ request: Request, phase: @Sendable (Phase) -> Void = { _ in },
                       log: @Sendable (String) -> Void) async throws -> Report {
         let start = ContinuousClock.now
+        try Self.checkWacOS(request)
         phase(.checkingMedia)
 
         log("inspecting \(request.iso.lastPathComponent)")
@@ -95,6 +118,7 @@ public struct ImageBuilder: Sendable {
         // (owner, 2026-11-24; VMConfig.offlineUntilSetupDone).
         var savedConfig = request.vm
         savedConfig.offlineUntilSetupDone = true
+        savedConfig.wacos = request.wacos
         let files = try await store.create(savedConfig)
         log("created VM '\(request.vm.name)' with a blank \(request.vm.diskSizeGiB) GiB disk")
 
@@ -109,7 +133,7 @@ public struct ImageBuilder: Sendable {
             imageIndex: image.index, username: request.username, password: password,
             timeZone: WindowsTimeZone.current, language: language,
             hideLicensePage: request.acceptWindowsLicense, testSigning: request.testSigning,
-            recipeName: request.recipe)
+            recipeName: request.recipe, wacos: request.wacos)
         let payloadImage = files.directory.appending(path: "setup-payload.img")
         var extra: [String: URL] = [:]
         if let d = request.drivers { extra["seemless/drivers"] = d }
@@ -123,6 +147,9 @@ public struct ImageBuilder: Sendable {
         }
         try await SetupPayload(assets: assets, settings: settings).writeDiskImage(to: payloadImage, extraDirectories: extra)
         log("payload disk written: \(payloadImage.path(percentEncoded: false))")
+        if let w = request.wacos {
+            log("WacOS \(w.tag) (experimental): Windows downloads it from GitHub at the first sign-in with the network on and installs it for the user")
+        }
         if !request.acceptWindowsLicense {
             log("Windows will show Microsoft's licence page on the VM's first start (after this build); accept it there")
         }
@@ -186,6 +213,8 @@ public struct ImageBuilder: Sendable {
             "language": .string(image.defaultLanguage ?? ""),
             "recipe": .string(request.recipe),
             "licenseAcceptedOnHost": .bool(request.acceptWindowsLicense),
+            "wacos": request.wacos.map { .string($0.tag) } ?? .null,
+            "wacosLicenseAcceptedOnHost": .bool(request.wacos != nil && request.acceptWacOSLicense),
             "status": result.status.map(JSONValue.string) ?? .null,
             "builtAt": .string(ISO8601DateFormatter().string(from: Date())),
             "seemlessVersion": .string(Seemless.version),

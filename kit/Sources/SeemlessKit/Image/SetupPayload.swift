@@ -17,6 +17,9 @@ public struct ImageAssets: Sendable, Equatable {
     /// Run by firstboot.cmd as SYSTEM: creates the local administrator
     /// account (OOBE's own account creation ignored the group on 26300).
     public static let accountScript = "setup-account.ps1"
+    /// Experimental WacOS shell (Image/WacOS.swift): copied to
+    /// C:\ProgramData\Seemless\wacos only when the VM is set up with it.
+    public static let wacosScript = "install-wacos.ps1"
     public func recipe(_ name: String) -> URL { root.appending(path: "recipes/\(name)", directoryHint: .isDirectory) }
 
     /// `$SEEMLESS_IMAGE_ASSETS`, else `Contents/Resources/image` of the app
@@ -86,6 +89,9 @@ public struct SetupPayload: Sendable {
         public var writeInventory: Bool
         public var testSigning: Bool
         public var recipeName: String
+        /// Experimental: the WacOS release the guest downloads and installs
+        /// after first setup. nil: no WacOS files on the payload at all.
+        public var wacos: WacOSRelease?
 
         /// A local Windows account name the answer file can create: 1-20
         /// letters, digits, . _ -, not a built-in account.
@@ -98,7 +104,8 @@ public struct SetupPayload: Sendable {
                     password: String, timeZone: String = "UTC", language: String = "en-US",
                     inputLocale: String? = nil, userLocale: String? = nil,
                     hideLicensePage: Bool = false, compactOS: Bool = true, writeInventory: Bool = true,
-                    testSigning: Bool = false, recipeName: String = "seemless-default") {
+                    testSigning: Bool = false, recipeName: String = "seemless-default",
+                    wacos: WacOSRelease? = nil) {
             self.imageIndex = imageIndex
             self.computerName = computerName
             self.username = username
@@ -112,6 +119,7 @@ public struct SetupPayload: Sendable {
             self.writeInventory = writeInventory
             self.testSigning = testSigning
             self.recipeName = recipeName
+            self.wacos = wacos
         }
 
         /// Values Windows would reject or that could break the generated files.
@@ -132,6 +140,7 @@ public struct SetupPayload: Sendable {
             }
             if timeZone.isEmpty || timeZone.contains(where: { "<>&\"".contains($0) }) { e.append("timeZone is invalid") }
             if recipeName.wholeMatch(of: /[A-Za-z0-9._-]+/) == nil { e.append("recipeName is invalid") }
+            if let wacos { e += wacos.validationErrors }
             return e
         }
     }
@@ -195,6 +204,12 @@ public struct SetupPayload: Sendable {
         // to C:\ProgramData\Seemless by apply.cmd, registered by firstboot.cmd.
         for script in ImageAssets.launcherScripts + [ImageAssets.accountScript] {
             files["seemless/guest/\(script)"] = crlf(try read(assets.guest.appending(path: script)))
+        }
+        if let wacos = s.wacos {
+            files["seemless/wacos/\(ImageAssets.wacosScript)"] = crlf(try read(assets.guest.appending(path: ImageAssets.wacosScript)))
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            files["seemless/wacos/wacos.json"] = try enc.encode(wacos)
         }
         files["seemless/config.cmd"] = crlf(Data("""
             @echo off

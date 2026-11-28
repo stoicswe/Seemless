@@ -231,6 +231,14 @@ private struct HardwareSection: View {
                          ? "Off (quarantined)"
                          : Format.network(c.network) + (c.portForwards.isEmpty ? "" : " · \(c.portForwards.count) forwards"))
                 }
+                if let w = c.wacos {
+                    InfoRow("Desktop") {
+                        HStack(spacing: 6) {
+                            Text("WacOS \(w.tag)")
+                            ExperimentalBadge()
+                        }
+                    }
+                }
             }
         }
     }

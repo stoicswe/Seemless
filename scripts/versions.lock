@@ -84,3 +84,11 @@ libjpeg-turbo     https://github.com/libjpeg-turbo/libjpeg-turbo.git      3.2.1 
 swift-argument-parser https://github.com/apple/swift-argument-parser.git 1.8.2  6a52f3251125d74daf04fcbd5e6f08a75d074382
 swift-protobuf    https://github.com/apple/swift-protobuf.git             1.41.0          fed2f76413026cb0ae90999a8c9116949dfe6aa6
 # crates.io: prost 0.14.6, prost-types 0.14.6, prost-build 0.14.6, protox 0.10.0
+
+# --- Guest downloads, never fetched, built or bundled by Seemless ---
+# WacOS (EXPERIMENTAL VM setup option, owner 2026-11-24): source-available,
+# no redistribution. Windows downloads the official release asset itself
+# (kit/Sources/SeemlessKit/Image/WacOS.swift pins the asset's SHA-256:
+# 70bdbb9778e80e81189e797e4b25180c6d186bc6f12b4cf35df26ed3cc89dbcf).
+# build-deps.sh never fetches this line. Bump both together.
+wacos             https://github.com/renzyxx/WacOS.git                    build-46        629c7985b319435d5140deb6d16f3989ba3e398b

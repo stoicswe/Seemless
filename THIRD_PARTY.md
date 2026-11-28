@@ -98,6 +98,12 @@ Unicode-3.0 data licence (unicode-ident). Only prost, prost-derive and bytes
 | cargo-xwin | 0.24.1 | MIT (crate metadata) | https://github.com/rust-cross/cargo-xwin | Windows build of the guest agent (WP4.2); its first build downloads Microsoft's CRT/SDK under Microsoft's licence (owner's decision, never bundled) |
 | rustup target `aarch64-pc-windows-msvc` | toolchain 1.99.1 | MIT OR Apache-2.0 (Rust) | https://rust-lang.org | Same |
 
+## Downloaded by Windows in the VM, never bundled
+
+| Project | Version | Licence | Source | Used for |
+|---------|---------|---------|--------|----------|
+| WacOS | build-46 (`629c7985`, asset SHA-256 `70bdbb97…`) | WacOS Source-Available License: personal, non-commercial use; no redistribution or bundling | https://github.com/renzyxx/WacOS | EXPERIMENTAL Mac-style desktop, a VM setup option (docs/03 "Optional: WacOS"). Seemless ships no WacOS file and copies none of its code: with the person's opt-in and licence acceptance, Windows downloads the official release asset, checks its SHA-256 and runs WacOS's own installer. Apple fonts, sounds and icons in that package are WacOS's, under their owners' terms. |
+
 ## Never bundled
 
 Windows media, product keys, Microsoft tools (DISM, oscdimg, ADK),

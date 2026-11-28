@@ -211,8 +211,10 @@ and an offline first setup.
   `VMConfig.offlineUntilSetupDone`. While it's set, each start unplugs the
   cable before the vCPUs run, so the licence page and first sign-in happen
   offline. `VMManager.finishOfflineSetup` plugs it in and clears the flag:
-  - automatically, when the guest agent reports a signed-in desktop (WP4.4,
-    to build);
+  - automatically, when the guest agent reports a signed-in desktop
+    (WP4.4: `AgentLink`, run by `vm run` and by the app's `VMManager.start`;
+    docs/06 "Session and system"). Verified on VM wp42 (2026-11-24): the
+    cable went in ~15 s after QEMU started, at the auto sign-in;
   - by hand, with Connect to Network or `seemlessctl vm network finish-setup`.
 
   The build itself still runs with no network device at all (docs/03).

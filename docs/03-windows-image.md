@@ -225,6 +225,51 @@ Applied by registry/policy in the image, not by killing Explorer:
   it); see [05-seamless-mode.md](05-seamless-mode.md) for how its windows are
   filtered.
 
+### Optional: WacOS (experimental; owner, 2026-11-24)
+
+A VM setup option (New VM sheet ▸ Desktop, automatic installs only;
+`seemlessctl image build --wacos --accept-wacos-license`) that replaces the
+Windows taskbar and Start menu with [WacOS](https://github.com/renzyxx/WacOS),
+a macOS-style shell: menu bar, Dock, Finder, Spotlight, Control Center.
+
+- **Licence.** WacOS is source-available, not open source: personal,
+  non-commercial use of the official release; no redistribution and no
+  bundling with other software. So Seemless ships **no** WacOS file and
+  copies none of its code. The person accepts the WacOS licence on the Mac
+  (a separate tick, never accepted for them); the build refuses
+  `--wacos` without it (`ImageBuilder.checkWacOS`).
+- **How it gets in.** The payload carries only our script
+  (`image/guest/install-wacos.ps1`) and the pin (`seemless/wacos/wacos.json`:
+  tag, commit, asset URL, SHA-256; `WacOSRelease.pinned`, also in
+  `scripts/versions.lock`). `apply.cmd` copies them to
+  `C:\ProgramData\Seemless\wacos`; `firstboot.cmd` registers the logon
+  task `\Seemless\WacOS` (Users group, **not** elevated: WacOS installs per
+  user). At sign-in the task waits for `github.com` (the first sign-in is
+  offline until the agent reports the desktop, docs/02 "Network link"),
+  downloads the asset with `curl.exe --proto =https`, refuses it unless the
+  SHA-256 matches, unpacks it and runs WacOS's own
+  `instalador\instalar.ps1 -Silencioso` (full shell, every question
+  answered yes). Once per user (`%LOCALAPPDATA%\Seemless\wacos-done.txt`);
+  failures retry at the next sign-in. Log:
+  `%LOCALAPPDATA%\Seemless\wacos.log`. The guest re-checks the URL and
+  hash format before use.
+- **What changes.** WacOS keeps Explorer running as the desktop
+  (`explorer=fundo`) and hides the taskbar and Start; its scheduled task
+  `WacOS` starts the shell at every sign-in. Quit: Ctrl+Alt+Shift+F12;
+  emergency (brings the taskbar back): Ctrl+Alt+Shift+F11. Uninstall from
+  Settings ▸ Apps.
+- **Limits.** WacOS is built for x64 only, so it runs under Windows'
+  x64 emulation; its Mac title bars are a DLL injected into other apps and
+  can only load into x64/x86 apps, not native ARM64 ones (Explorer,
+  Notepad, Settings). Needs a network: not offered for a VM quarantined
+  with the network off. Silent mode also opens Windows' default-apps page
+  and may ask for administrator rights (system folder icons).
+- **Zen mode** is off for WacOS VMs: its menu bar, Dock and title bars would
+  double up with the Mac's. Zen with WacOS is planned after it is tested in
+  desktop mode (docs/05, roadmap WP5.8).
+- **Updates.** WacOS updates itself from GitHub (System Settings ▸ General ▸
+  Software Update in WacOS). Seemless's pin only decides the first install.
+
 ## Activation and licensing
 
 - The image is unactivated unless the user enters a key (Settings in guest, or

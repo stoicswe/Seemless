@@ -32,7 +32,7 @@ Preview 1 ships.
 |---|------|---------------|--------------|
 | P1 ◐ | **Self-contained, signed app**: QEMU, the graphics stack, swtpm and firmware inside `Seemless.app` (no `build/prefix`), Developer ID signing, hardened runtime with the hypervisor entitlement, notarization, a release zip/dmg, and GPL source offers plus third-party notices in the app | WP8.1, WP8.2, WP8.5 | Scripts done (2026-11-24, `docs/release.md`): the relocated app boots firmware with no `build/prefix` or Homebrew; every library is built from pinned source for macOS 26 (audit clean). Signing: self-signed, not notarized for Preview 1 (owner); the owner creates the identity with `scripts/release/make-signing-cert.sh` |
 | P2 | **First run without Terminal**: pick an ISO, build the VM, the user accepts the Windows licence in the VM window, progress and errors in the app; desktop mode complete (typing, resize changes the guest resolution, HiDPI); audio out | WP3.4, WP3.2, WP3.5 (audio, scaling) | Fast Startup is already off in the image (S6b) |
-| P3 | **Agent in every VM**: WP4.2, then tools install and update (WP4.3), then host info, time sync and graceful shutdown (WP4.4) | WP4.2–4.4 | WP4.2 waits for the owner's CRT/SDK build (`guest/tools/build-agent.sh`) |
+| P3 ✅ | **Agent in every VM**: WP4.2, then tools install and update (WP4.3), then host info, time sync and graceful shutdown (WP4.4) | WP4.2–4.4 | Done 2026-11-24 on VM wp42. Open: bundling `build/guest-tools` into the app (P1), an update button in the app, DPI/locale/time zone in `SetHostInfo` |
 | P4 | **Zen, experimental, on the real agent**: real windows (Z2: WP5.2 with WP5.1's model), input and focus with native cursor shapes (Z3: WP5.3), the clipboard both ways (WP4.5). Tier 2 (crop) only, labelled experimental | WP5.2, WP5.3, WP4.5 | After P3's WP4.2 |
 | P5 | **Supportable**: a diagnostics export for bug reports (logs, configs, no disk contents or personal data), crash reporting, an updater | WP8.6, WP8.3 | After P1 |
 | P6 | **User docs**: README for testers (requirements: Apple silicon, macOS 26+, own ISO; install; known issues), GitHub release notes | WP8.7 (minimal) | Last before release |
@@ -83,6 +83,7 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 | WP2.4 ◐ | `apply.cmd` full version (runs on real media through first boot with the default recipe, S4/WP2.3) with debloat, driver injection, progress protocol; host-side progress parser | `seemlessctl image build --iso ... --recipe seemless-gaming` produces a booting image unattended |
 | WP2.5 ◐ | First-boot script (minimal version: report + shutdown; runtimes, shell config, seal still to do), runtimes install, shell configuration (03), seal + manifest | Image boots to an auto-logged-on, quiet desktop; disk usage and idle RAM reported and compared with G4 |
 | WP2.6 | Path B: accept a user-built Tiny11 ISO | Same command works with a Tiny11 Builder output ISO |
+| WP2.7 ✅ | **Experimental** WacOS desktop as a VM setup option (owner, 2026-11-24; docs/03 "Optional: WacOS"): the guest downloads the pinned official release after first setup and runs its own installer; Seemless ships none of it | A VM built with `--wacos --accept-wacos-license` signs in to WacOS's menu bar and Dock with no taskbar or Start menu (screendump) |
 
 ## M3 — App shell, display, desktop mode
 
@@ -102,7 +103,7 @@ fall back to SPICE/CocoaSpice for display and accept the latency.
 | WP4.1 ✅ | `proto/seemless.proto`, Swift and Rust codegen, framing, handshake; mock agent | Mock agent ↔ `AgentClient` round-trip tests on macOS |
 | WP4.2 | Rust service + session agent skeleton, vioserial transport, named pipe, supervision | `seemlessctl agent info` returns `GuestInfo` from a real VM |
 | WP4.3 ✅ | Guest tools ISO build + install/update flow | Version bump updates agent in place; survives logoff |
-| WP4.4 | System messages: host info (resolution/DPI/work area/theme), time sync, shutdown, session state | Changing Mac appearance flips Windows theme; graceful shutdown works |
+| WP4.4 ✅ | System messages: host info (resolution/DPI/work area/theme), time sync, shutdown, session state | Changing Mac appearance flips Windows theme; graceful shutdown works |
 | WP4.5 | Clipboard text/RTF/HTML/image both ways with lazy fetch and privacy rules | Manual matrix in `docs/testing/clipboard.md` passes |
 | WP4.6 | Windows driver build VM scripts (replaces dependence on UTM's prebuilt drivers) | Drivers built from pinned sources install and pass S2's check |
 
@@ -120,6 +121,7 @@ order").
 | WP5.5 | Move/resize/minimise/maximise/close mapping; owned dialogs; transients (menus, tooltips, dropdowns) | Edge-case list in 05 walked and results recorded in `docs/testing/seamless.md` |
 | WP5.6 | Launcher (app catalogue, icons, launch), Dock menu, mode switching, agent-lost fallback | Launch any Start-menu app from the Mac launcher |
 | WP5.7 | Latency bench + host-driven move (v2) | Move lag under 2 frames (G2) |
+| WP5.8 | Zen with WacOS (owner, 2026-11-24: after WP2.7 is tested in desktop mode): hide WacOS's menu bar and Dock windows from the window model, keep its title bars off Zen windows (or pause the shell in Zen) | A WacOS VM's Notepad shows as one Mac window with one title bar; WacOS's own bars never appear as Mac windows |
 
 ## M6 — macOS integration
 

@@ -1,9 +1,31 @@
 # Status
 
-Updated: 2026-11-24 (Show Display opens the app's desktop window for exported displays)
+Updated: 2026-11-24 (experimental WacOS desktop as a VM setup option, WP2.7)
 
 ## Done
 
+- **WP2.7 ✅ WacOS desktop, experimental** (2026-11-24, owner request;
+  docs/03 "Optional: WacOS"): a VM setup option that replaces the taskbar
+  and Start menu with WacOS (github.com/renzyxx/WacOS).
+  - Where: New VM sheet ▸ Desktop (automatic installs; separate licence
+    tick), `image build --wacos --accept-wacos-license`. Zen is off for
+    these VMs (WP5.8 later). Not offered when quarantined without network.
+  - Seemless ships no WacOS file (its licence forbids redistribution):
+    Windows downloads the pinned official release (build-46, SHA-256
+    checked) at the first sign-in with the network on and runs WacOS's own
+    silent installer, per user, not elevated.
+  - Verified on VM `wacos-test` (owner accepted the WacOS licence for the
+    test): build `FIRSTBOOT_OK` in 7 min 9 s, firstboot log `registered
+    \Seemless\WacOS`, the agent ended the offline setup at 16:08:09 and the
+    network came on; at 16:10 a capture of the VM window showed WacOS's menu
+    bar, Dock and widgets with no taskbar or Start button. QMP `screendump`
+    is black with the 3D display (as before), so the check used
+    `screencapture -l` of the QEMU window.
+  - Seen: WacOS's silent mode leaves Windows' default-apps page open
+    (QuickTime Player). Not checked: the guest's `wacos.log`, a second
+    user, a retry after a failed download, the New VM sheet by hand.
+  - Owner tried it on `wacos-test` and marked it complete (2026-11-24).
+  - 219 Swift tests pass (8 new in `WacOSTests`); `scripts/check.sh` passes.
 - **Network switch and offline first setup** (2026-11-24, owner request):
   - Machine ▸ Disconnect from / Connect to Network (⌥⌘I), and `seemlessctl
     vm network status|connect|disconnect|finish-setup`. Both use QMP
@@ -551,8 +573,27 @@ Open questions come last.
    hot-plugged `usb-bot` stays detached until `attached` is set. Not yet:
    the app bundling `Resources/guest-tools` (P1's packaging), an update
    button in the app, drivers/redist on the ISO (Q1, Q7, Q13).
-   Next: WP4.4 (host info, time sync, shutdown, session state, offline
-   first-setup trigger).
+   WP4.4 ✅ (2026-11-24): system family (`system.v1`): `SessionState`
+   (polled console session), `TimeSync`, `Shutdown` (shutdown/restart/
+   logoff), `SetHostInfo` (appearance → Windows light/dark theme); host
+   `AgentLink` (short syncs, run by `vm run` and `VMManager.start`) ends
+   the offline first setup at a signed-in desktop; stop asks Windows
+   through the agent first. Acceptance on wp42 (agent 0.0.4): `agent sync
+   --appearance dark|light` flipped the taskbar theme both ways
+   (screenshots); the link set Windows dark from the Mac's dark mode; `vm
+   stop` → "Windows is shutting down (asked through the agent)" → stopped
+   in ~3 s; `agent shutdown --mode restart` rebooted Windows inside the same
+   QEMU (firmware screen 6 s later); logoff → `logged_on=false`; offline
+   boot: network connected 15 s after QEMU start (`[15:16:11] Windows
+   reached a signed-in desktop; ending the offline first setup`). Mock: 5
+   `AgentLinkTests` + `seemlessctl agent sync` against `proto/mock/system.json`.
+   Bug found and fixed: after a host disconnect, the service's next
+   unprompted write could block the host port for minutes (serial writes
+   now gated on vioserial's HostConnected + 5 s timeout; docs/06). Not
+   verified: flipping the Mac's own appearance while a VM runs (no system
+   settings changed from here; the same code path ran with an injected
+   value), the app's link (built, not clicked), DPI/locale/time zone
+   (not applied yet), `secure_desktop` (always false).
 2. WP5.1 (guest `windows-model`) and the host `WindowModel`: both can be
    driven by the mock agent now.
 3. WP7.5, D3D12 (◐ 2026-11-24; note `docs/spikes/WP7.5-d3d12-host-backend.md`):
@@ -650,4 +691,6 @@ Open questions come last.
 | 2026-11-24 | P1 (◐) | Release packaging: self-contained app, otool audit, hardened-runtime signing (ad-hoc here), notices, source offer. Then (owner: build from source) QEMU/swtpm libraries from pinned source for macOS 26, QEMU without gnutls/SDL/libusb/zstd; audit clean, relocated app boots firmware; Developer ID run left to the owner |
 | 2026-11-24 | WP4.2 | Rust service + session agent over vioserial; `agent info` returns real GuestInfo from Windows (VM wp42); session agent reached through the pipe. First build failed to start in Windows (VCRUNTIME140.dll missing): CRT now static |
 | 2026-11-24 | WP4.3 | Guest tools ISO + `seemlessctl tools update`: agent 0.0.1 → 0.0.2 in place on VM wp42, service survives sign-out; every image build installs the agent by default; fixed usb-bot hot-plug (needs `attached`) |
+| 2026-11-24 | WP4.4 | System messages (session state, time, shutdown, theme) + host AgentLink: offline first setup ends at the signed-in desktop (15 s on wp42), agent-first graceful stop; fixed a host-port write that blocked after a host disconnect |
+| 2026-11-24 | WP2.7 | Experimental WacOS desktop as a VM setup option: guest downloads the pinned official release after first setup and installs it; menu bar and Dock replace the taskbar on VM wacos-test; Zen off for WacOS VMs |
 | 2026-11-24 | Network + quarantine | Machine-menu network switch (QMP `set_link`), offline first setup for image-built VMs, and quarantine (per-connection switches; off = no device). Verified on Windows 11 and a quarantined firmware boot; 203 Swift tests |

@@ -1,0 +1,8 @@
+{
+  "build": "seemless-mock-agent system",
+  "capabilities": ["core.v1", "system.v1"],
+  "steps": [
+    {"send": {"sessionState": {"loggedOn": true, "user": "Seemless"}}},
+    {"expect": "setHostInfo", "timeoutMs": 5000}
+  ]
+}

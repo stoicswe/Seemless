@@ -110,9 +110,10 @@ over unix sockets; only the `win` modules are Windows-only.
   `%ProgramData%\Seemless\logs\agent-svc.log` (one `.1` kept past 1 MiB).
 - **Host link.** The service opens the control port, sends `Hello`, and
   reopens the port 1 s after it fails (missing driver, read error). It answers
-  `Hello`, `Ping`, `GetGuestInfo` and `UpdateTools` (WP4.3) itself;
-  `SetHostInfo`, `TimeSync`, `Shutdown` and `RunCommand` get `Error
-  UNSUPPORTED` until their work packages (WP4.4); window, app, clipboard and drag requests
+  `Hello`, `Ping`, `GetGuestInfo`, `UpdateTools` (WP4.3), `TimeSync`,
+  `Shutdown` and `SetHostInfo` (WP4.4, "Session and system" below)
+  itself and advertises `core.v1` + `system.v1`; `RunCommand` gets `Error
+  UNSUPPORTED`; window, app, clipboard and drag requests
   are forwarded to the session agent (`UNSUPPORTED` when none is running).
   A host `Hello` with `reply_to = 0` starts a new host connection: seqs
   restart at 1 and requests in flight across the service are dropped.
@@ -158,6 +159,17 @@ over unix sockets; only the `win` modules are Windows-only.
   restarts, `sc start`). The vioserial driver comes from `--drivers`. In-place
   updates: "Guest tools ISO" below.
 
+- **Writes to the host port** (WP4.4 finding). After a host disconnects,
+  a write the service sends unprompted (a `SessionState` change) could
+  stay queued in the virtio-serial path forever on this QEMU + vioserial
+  build, blocking every later write, including the Hello reply to the next
+  host (the agent looked dead for minutes). The serial writer therefore asks
+  the driver first (`IOCTL_GET_INFORMATION` → `VIRTIO_PORT_INFO.HostConnected`)
+  and drops the frame while no host is connected; treats `STATUS_CANT_WAIT`
+  (554) the same; and cancels and drops a write that makes no progress for
+  5 s. Dropped frames are logged (1st, 2nd, 4th, …). A reconnecting host
+  always starts with Hello, so nothing it needs is lost.
+
 ## Message catalogue (v1)
 
 Direction: H→G host to guest, G→H guest to host. This table is the contract;
@@ -174,6 +186,47 @@ Direction: H→G host to guest, G→H guest to host. This table is the contract;
 | `Shutdown { mode: shutdown|restart|logoff|hibernate }` | H→G | Graceful power |
 | `GuestInfo { os_build, driver_versions, agent_version, gpu_adapter }` | G→H | Diagnostics |
 | `UpdateTools { iso_volume_label, version }` | H→G | Service installs from attached tools ISO |
+
+**Built (WP4.4, capability `system.v1`, all in the service):**
+
+- `SessionState`: the service polls the console session every 2 s
+  (`WTSGetActiveConsoleSessionId` + `WTSQuerySessionInformationW
+  (WTSSessionInfoEx)`: user name, lock flag) and sends it right after each
+  host Hello and on every change. `secure_desktop` is not detected yet
+  (always false). `logged_on` is true for any user, including OOBE's
+  temporary `defaultuser0`; the host decides what counts as a desktop.
+- `TimeSync`: range-checked (2020–2200), then `SetSystemTime` with
+  SeSystemtimePrivilege. `Ack`, or `Error INTERNAL` if Windows refused.
+- `Shutdown`: shutdown/restart via `InitiateSystemShutdownExW` (apps asked,
+  not forced; planned reason), logoff via `WTSLogoffSession` on the console
+  session; started 1 s after the `Ack`. `HIBERNATE` → `UNSUPPORTED` (S6b).
+- `SetHostInfo`: bounds-checked, `Ack`ed and stored by the service, sent to
+  the session agent (and replayed to each new one). The session agent
+  applies only `appearance` so far: `AppsUseLightTheme` +
+  `SystemUsesLightTheme` under `HKCU\…\Themes\Personalize`, then a
+  `WM_SETTINGCHANGE "ImmersiveColorSet"` broadcast. Resolution follows the
+  display path (docs/04); DPI, work area, locale, keyboard layout and time
+  zone are not applied yet.
+
+**Host side: `AgentLink`** (`kit/Sources/SeemlessKit/Agent/AgentLink.swift`),
+run by whoever owns the VM process (`VMManager.start` for the app, `vm run`
+for the CLI) unless quarantine has the agent connection off. QEMU's agent
+chardev serves one client at a time, so the link never holds it: each sync
+is a short connection (Hello → the service's `SessionState` → `TimeSync` →
+`SetHostInfo` → close). It syncs at start, every 5 min (every 5 s while an
+offline first setup is pending), when the Mac's appearance changes
+(`AppleInterfaceStyle`, checked every 2 s) and after resume. When a sync
+sees a signed-in desktop (`logged_on`, not locked, not secure desktop, user
+not `defaultuser*`), it calls `VMManager.finishOfflineSetup` once (docs/02
+"Network link"). No agent, an old agent without `system.v1`, or no agent
+channel at all is normal: syncs fail quietly. `seemlessctl agent sync`
+runs one sync by hand; `SEEMLESS_AGENT_LINK_SKIP=time,hostinfo|all`
+(debugging) leaves parts out in `vm run`.
+
+**Graceful stop:** `VMManager.stop`, `seemlessctl vm stop` and Ctrl-C in
+`vm run` first send `Shutdown` through the agent, then fall back to the
+ACPI power button and finally a forced stop. `seemlessctl agent shutdown
+--mode shutdown|restart|logoff` sends it alone.
 
 ### Windows (seamless)
 

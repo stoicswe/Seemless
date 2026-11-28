@@ -49,6 +49,15 @@ echo registering launcher
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramData%\Seemless\register-launcher.ps1" -Source "%ProgramData%\Seemless"
 echo register-launcher exit %ERRORLEVEL%
 
+rem Experimental WacOS shell (docs/03 "Optional: WacOS"): a logon task that
+rem downloads the pinned official release once the network is on and runs
+rem its own installer for the user. Not fatal: Windows works without it.
+if exist "%ProgramData%\Seemless\wacos\install-wacos.ps1" (
+  echo registering WacOS install task
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ProgramData%\Seemless\wacos\install-wacos.ps1" -Register
+  echo register WacOS exit %ERRORLEVEL%
+)
+
 rem Guest agent service (docs/06). apply.cmd copied the agent folder (image
 rem build --agent) to Program Files\Seemless; install.cmd registers the
 rem SeemlessAgent service, which starts on every boot from now on.

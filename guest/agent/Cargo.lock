@@ -31,7 +31,7 @@ checksum = "776dfebd015e2d8732c684a2c71003674ccb49457b539b9e82151ba38e96dd7c"
 
 [[package]]
 name = "capture"
-version = "0.0.3"
+version = "0.0.4"
 
 [[package]]
 name = "cfg-if"
@@ -41,7 +41,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "clip"
-version = "0.0.3"
+version = "0.0.4"
 
 [[package]]
 name = "either"
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "proto"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "prost",
  "prost-build",
@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "protogen"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "prost",
  "prost-types",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "session"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "proto",
  "transport",
@@ -465,11 +465,11 @@ dependencies = [
 
 [[package]]
 name = "shell"
-version = "0.0.3"
+version = "0.0.4"
 
 [[package]]
 name = "svc"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "proto",
  "transport",
@@ -571,7 +571,7 @@ checksum = "009dbb7700f11c55ef83aebbe4c0e9cf1f1ac0844bd8d6f00dc38f302026e13a"
 
 [[package]]
 name = "transport"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "proto",
  "windows-sys",
@@ -597,7 +597,7 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-model"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "proto",
  "serde",

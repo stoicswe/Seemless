@@ -136,7 +136,8 @@ struct VMCommands: Commands {
             }
             .keyboardShortcut("z", modifiers: [.command, .control])
             // Zen needs the guest agent's window list; quarantine may leave it out.
-            .disabled(!(item?.status.isActive ?? false) || item?.config.allows(.agent) == false)
+            .disabled(!(item?.status.isActive ?? false) || item?.config.allows(.agent) == false
+                      || item?.config.hasWacOS == true)
             Button("Show Display") { model.showDisplay(name) }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
                 .disabled(!(item?.status.isActive ?? false))
